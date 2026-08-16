@@ -636,7 +636,7 @@ const msalConfig = {
   cache: { cacheLocation: "sessionStorage" }
 };
 const msalInstance = new msal.PublicClientApplication(msalConfig);
-const GRAPH_SCOPES = ["Files.ReadWrite"];
+const GRAPH_SCOPES = ["Files.ReadWrite", "Sites.ReadWrite.All"];
 let graphAccount = null;
 
 async function withRetry(fn, attempts = 3, baseDelayMs = 500) {
