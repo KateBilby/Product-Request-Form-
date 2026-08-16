@@ -703,7 +703,10 @@ async function graphFetch(path, options = {}) {
 }
 
 function siteFileTablePath(file, table, suffix = "") {
-  const site = encodeURIComponent(`${GRAPH_SITE_HOSTNAME}:${GRAPH_SITE_PATH}`).replace(/%3A/g, ':');
+  // Hostname/site-path are plain ASCII with no characters that need escaping —
+  // encoding them was mangling every "/" into "%2F", which broke Graph's site
+  // resolution and surfaced as a confusing "segment 'root:' not found" error.
+  const site = `${GRAPH_SITE_HOSTNAME}:${GRAPH_SITE_PATH}`;
   return `/sites/${site}:/drive/root:/${encodeURIComponent(file)}:/workbook/tables/${table}${suffix}`;
 }
 
