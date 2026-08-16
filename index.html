@@ -636,7 +636,7 @@ const msalConfig = {
   cache: { cacheLocation: "sessionStorage" }
 };
 const msalInstance = new msal.PublicClientApplication(msalConfig);
-const GRAPH_SCOPES = ["Files.ReadWrite"];
+const GRAPH_SCOPES = ["Files.ReadWrite", "Sites.Read.All"];
 let graphAccount = null;
 
 async function withRetry(fn, attempts = 3, baseDelayMs = 500) {
@@ -1437,6 +1437,22 @@ async function onSubmit(e) {
   const list = await loadRequests();
   list.push(entry);
   const ok = await saveRequests(list);
+
+  if (!ok) {
+    const toastErr = document.getElementById('toast');
+    toastErr.textContent = "Couldn't save this request — check your connection and try again. Nothing was submitted.";
+    toastErr.style.background = '#FBEAE8';
+    toastErr.style.color = 'var(--rush)';
+    toastErr.style.borderColor = '#E8B4AF';
+    toastErr.classList.add('show');
+    setTimeout(() => {
+      toastErr.classList.remove('show');
+      toastErr.style.background = '';
+      toastErr.style.color = '';
+      toastErr.style.borderColor = '';
+    }, 5000);
+    return;
+  }
 
   if (ok) {
     await saveRecentRecipient({ name: recipientName, addr1, addr2, city, state: entry.state, zip, country: entry.country, phone: entry.phone });
