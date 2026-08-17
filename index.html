@@ -711,6 +711,13 @@ function siteFileTablePath(file, table, suffix = "") {
 }
 
 // ---- AppStorage (Key/Value) table: get + set ----
+// TEMPORARY FALLBACK: if Microsoft Graph can't be reached (the Sites
+// permission issue), these fall back to this browser's own localStorage
+// instead of blocking the person using the tool. IMPORTANT: fallback data
+// is NOT shared with the team and does NOT sync to AppStorage.xlsx — it
+// only exists in this one browser until the real Graph permission is
+// fixed. `usedLocalFallback` gets set so onSubmit can warn accordingly.
+let usedLocalFallback = false;
 async function findKVRow(key) {
   const data = await withRetry(() => graphFetch(siteFileTablePath(APPSTORAGE_FILE, APPSTORAGE_TABLE, "/rows")));
   const rows = (data && data.value) || [];
@@ -722,23 +729,35 @@ async function findKVRow(key) {
   return null;
 }
 async function flowGet(key) {
-  const match = await findKVRow(key);
-  return match ? match.value : null;
+  try {
+    const match = await findKVRow(key);
+    return match ? match.value : null;
+  } catch (e) {
+    console.warn('flowGet: Graph unavailable, reading local fallback for', key, e);
+    usedLocalFallback = true;
+    try { return window.localStorage.getItem("lemme-local-" + key); } catch (e2) { return null; }
+  }
 }
 async function flowSet(key, value) {
-  const match = await findKVRow(key);
-  if (match) {
-    await withRetry(() => graphFetch(
-      siteFileTablePath(APPSTORAGE_FILE, APPSTORAGE_TABLE, `/rows/itemAt(index=${match.index})`),
-      { method: "PATCH", body: JSON.stringify({ values: [[key, value]] }) }
-    ));
-  } else {
-    await withRetry(() => graphFetch(
-      siteFileTablePath(APPSTORAGE_FILE, APPSTORAGE_TABLE, "/rows/add"),
-      { method: "POST", body: JSON.stringify({ values: [[key, value]] }) }
-    ));
+  try {
+    const match = await findKVRow(key);
+    if (match) {
+      await withRetry(() => graphFetch(
+        siteFileTablePath(APPSTORAGE_FILE, APPSTORAGE_TABLE, `/rows/itemAt(index=${match.index})`),
+        { method: "PATCH", body: JSON.stringify({ values: [[key, value]] }) }
+      ));
+    } else {
+      await withRetry(() => graphFetch(
+        siteFileTablePath(APPSTORAGE_FILE, APPSTORAGE_TABLE, "/rows/add"),
+        { method: "POST", body: JSON.stringify({ values: [[key, value]] }) }
+      ));
+    }
+    return true;
+  } catch (e) {
+    console.warn('flowSet: Graph unavailable, saving local fallback for', key, e);
+    usedLocalFallback = true;
+    try { window.localStorage.setItem("lemme-local-" + key, value); return true; } catch (e2) { return false; }
   }
-  return true;
 }
 
 // Pushes one flat row per product line straight into the Tracker workbook's
@@ -746,14 +765,28 @@ async function flowSet(key, value) {
 // update itself. One order with 3 products sends 3 rows here in a single
 // call, all sharing the same timestamp/requestor/recipient so the Export
 // sheet's grouping formulas still combine them under one Order Number.
+// Same temporary local-fallback behavior as flowGet/flowSet above.
 const TRACKER_COLUMNS = ["Timestamp","Requestor Name","Reason Code","Shipping Speed","Recipient Name","Street Address 1","Street Address 2","City","State","Zip","Country","Phone","SKU","Product Title","Quantity","Notes","Processed"];
 async function flowAppendRows(rows) {
   const values = rows.map(r => TRACKER_COLUMNS.map(col => (r[col] === undefined ? "" : r[col])));
-  await withRetry(() => graphFetch(
-    siteFileTablePath(TRACKER_FILE, TRACKER_TABLE, "/rows/add"),
-    { method: "POST", body: JSON.stringify({ values }) }
-  ));
-  return true;
+  try {
+    await withRetry(() => graphFetch(
+      siteFileTablePath(TRACKER_FILE, TRACKER_TABLE, "/rows/add"),
+      { method: "POST", body: JSON.stringify({ values }) }
+    ));
+    return true;
+  } catch (e) {
+    console.warn('flowAppendRows: Graph unavailable, queueing locally instead', e);
+    usedLocalFallback = true;
+    try {
+      const queue = JSON.parse(window.localStorage.getItem('lemme-local-tracker-queue') || '[]');
+      queue.push(...rows);
+      window.localStorage.setItem('lemme-local-tracker-queue', JSON.stringify(queue));
+      return true;
+    } catch (e2) {
+      return false;
+    }
+  }
 }
 
 let lineCounter = 0;
@@ -1434,6 +1467,7 @@ async function onSubmit(e) {
     processed: false
   };
 
+  usedLocalFallback = false;
   const list = await loadRequests();
   list.push(entry);
   const ok = await saveRequests(list);
@@ -1506,7 +1540,9 @@ async function onSubmit(e) {
     counterEl.style.display = 'block';
 
     const toast = document.getElementById('toast');
-    toast.textContent = "Request submitted. Your name and reason code are still filled in — go ahead and enter the next person's request.";
+    toast.textContent = usedLocalFallback
+      ? "Saved to this browser only — the shared connection to SharePoint is still down, so your team can't see this yet. Your name and reason code are still filled in."
+      : "Request submitted. Your name and reason code are still filled in — go ahead and enter the next person's request.";
     toast.classList.add('show');
     setTimeout(() => toast.classList.remove('show'), 5000);
     renderQueue();
