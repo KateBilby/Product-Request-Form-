@@ -1626,13 +1626,23 @@ async function exportCSV() {
   const toExport = list.filter(r => showAll || isToday(r.ts));
   if (toExport.length === 0) { alert('Nothing to export.'); return; }
 
-  // assign unique order numbers: firstName MM-DD_ops, with numeric suffix if the same person has multiple orders that day
+  // assign unique order numbers: firstName MM-DD_ops, with a letter suffix
+  // (A, B, C...) if two different RECIPIENTS share the same first name that day
+  function idxToLetters(idx) {
+    let n = idx, s = '';
+    while (n > 0) {
+      const rem = (n - 1) % 26;
+      s = String.fromCharCode(65 + rem) + s;
+      n = Math.floor((n - 1) / 26);
+    }
+    return s;
+  }
   const dateGroupCounts = {};
   const orderNumbers = {};
   toExport.forEach(r => {
     const d = new Date(r.ts);
     const dateKey = `${d.getMonth()+1}-${d.getDate()}`;
-    const firstName = (r.requestorName.split(' ')[0] || r.requestorName);
+    const firstName = (r.recipientName.split(' ')[0] || r.recipientName);
     const key = firstName + '|' + dateKey;
     dateGroupCounts[key] = (dateGroupCounts[key] || 0) + 1;
     orderNumbers[r.id] = { firstName, dateKey, key, idx: dateGroupCounts[key] };
@@ -1644,7 +1654,7 @@ async function exportCSV() {
 
   toExport.forEach(r => {
     const info = orderNumbers[r.id];
-    const label = keyTotals[info.key] > 1 ? `${info.firstName}${info.idx}` : info.firstName;
+    const label = keyTotals[info.key] > 1 ? `${info.firstName}${idxToLetters(info.idx)}` : info.firstName;
     const orderNumber = `${label} ${info.dateKey}_ops`;
 
     r.lines.forEach((line, i) => {
