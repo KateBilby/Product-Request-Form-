@@ -668,9 +668,8 @@ async function ensureSignedIn() {
 }
 
 async function signIn() {
-  const result = await msalInstance.loginPopup({ scopes: GRAPH_SCOPES });
-  graphAccount = result.account;
-  return graphAccount;
+  await msalInstance.loginRedirect({ scopes: GRAPH_SCOPES });
+
 }
 
 async function getGraphToken() {
