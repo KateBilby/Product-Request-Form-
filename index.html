@@ -636,7 +636,7 @@ const msalConfig = {
   cache: { cacheLocation: "sessionStorage" }
 };
 const msalInstance = new msal.PublicClientApplication(msalConfig);
-const GRAPH_SCOPES = ["Files.ReadWrite"];
+const GRAPH_SCOPES = ["Files.ReadWrite", "Sites.Read.All"];
 let graphAccount = null;
 
 async function withRetry(fn, attempts = 3, baseDelayMs = 500) {
@@ -710,35 +710,23 @@ function siteFileTablePath(file, table, suffix = "") {
   return `/sites/${site}:/drive/root:/${encodeURIComponent(file)}:/workbook/tables/${table}${suffix}`;
 }
 
-// ---- AppStorage (Key/Value) table: get + set ----
-async function findKVRow(key) {
-  const data = await withRetry(() => graphFetch(siteFileTablePath(APPSTORAGE_FILE, APPSTORAGE_TABLE, "/rows")));
-  const rows = (data && data.value) || [];
-  for (let i = 0; i < rows.length; i++) {
-    if (rows[i].values && rows[i].values[0] && rows[i].values[0][0] === key) {
-      return { index: i, value: rows[i].values[0][1] };
-    }
-  }
-  return null;
-}
+// ---- AppStorage (Key/Value): local-only for now ----
+// TEMPORARY: this used to read/write a shared "AppStorage.xlsx" workbook in
+// SharePoint over Microsoft Graph, which required a Microsoft sign-in plus
+// an admin-approved Graph permission (Sites.Read.All) that hasn't been
+// granted yet. Until that's sorted out, everything is stored in this
+// browser's own localStorage instead, so the tool works standalone for
+// demos. IMPORTANT: this data lives only in this browser — it is NOT
+// shared between people or devices, and clearing browser data erases it.
+// Swap this back to the Graph-backed version (see git history) once
+// Sites.Read.All is approved.
 async function flowGet(key) {
-  const match = await findKVRow(key);
-  return match ? match.value : null;
+  try { return window.localStorage.getItem("lemme-local-" + key); }
+  catch (e) { console.error('flowGet (local) failed', e); return null; }
 }
 async function flowSet(key, value) {
-  const match = await findKVRow(key);
-  if (match) {
-    await withRetry(() => graphFetch(
-      siteFileTablePath(APPSTORAGE_FILE, APPSTORAGE_TABLE, `/rows/itemAt(index=${match.index})`),
-      { method: "PATCH", body: JSON.stringify({ values: [[key, value]] }) }
-    ));
-  } else {
-    await withRetry(() => graphFetch(
-      siteFileTablePath(APPSTORAGE_FILE, APPSTORAGE_TABLE, "/rows/add"),
-      { method: "POST", body: JSON.stringify({ values: [[key, value]] }) }
-    ));
-  }
-  return true;
+  try { window.localStorage.setItem("lemme-local-" + key, value); return true; }
+  catch (e) { console.error('flowSet (local) failed', e); return false; }
 }
 
 // Pushes one flat row per product line straight into the Tracker workbook's
@@ -748,11 +736,12 @@ async function flowSet(key, value) {
 // sheet's grouping formulas still combine them under one Order Number.
 const TRACKER_COLUMNS = ["Timestamp","Requestor Name","Reason Code","Shipping Speed","Recipient Name","Street Address 1","Street Address 2","City","State","Zip","Country","Phone","SKU","Product Title","Quantity","Notes","Processed"];
 async function flowAppendRows(rows) {
-  const values = rows.map(r => TRACKER_COLUMNS.map(col => (r[col] === undefined ? "" : r[col])));
-  await withRetry(() => graphFetch(
-    siteFileTablePath(TRACKER_FILE, TRACKER_TABLE, "/rows/add"),
-    { method: "POST", body: JSON.stringify({ values }) }
-  ));
+  // TEMPORARY: no-op until Sites.Read.All is approved (see flowGet/flowSet
+  // above) — there's no shared Tracker workbook to push to from here yet.
+  // Requests are still fully saved in this browser's own queue via
+  // saveRequests()/flowSet() above; this only skipped the *extra* copy
+  // that used to go into Product_Request_Tracker.xlsx.
+  console.info('flowAppendRows (local mode): skipped — no Tracker workbook connected.', rows);
   return true;
 }
 
@@ -1438,6 +1427,22 @@ async function onSubmit(e) {
   list.push(entry);
   const ok = await saveRequests(list);
 
+  if (!ok) {
+    const toastErr = document.getElementById('toast');
+    toastErr.textContent = "Couldn't save this request — check your connection and try again. Nothing was submitted.";
+    toastErr.style.background = '#FBEAE8';
+    toastErr.style.color = 'var(--rush)';
+    toastErr.style.borderColor = '#E8B4AF';
+    toastErr.classList.add('show');
+    setTimeout(() => {
+      toastErr.classList.remove('show');
+      toastErr.style.background = '';
+      toastErr.style.color = '';
+      toastErr.style.borderColor = '';
+    }, 5000);
+    return;
+  }
+
   if (ok) {
     await saveRecentRecipient({ name: recipientName, addr1, addr2, city, state: entry.state, zip, country: entry.country, phone: entry.phone });
     populateRecipientDatalist(await loadRecentRecipients());
@@ -1721,7 +1726,7 @@ async function exportCSV() {
   URL.revokeObjectURL(url);
 }
 
-bootWithSignIn();
+init(); // TEMPORARY: sign-in gate (bootWithSignIn) skipped — see notes above.
 </script>
 </body>
 </html>
