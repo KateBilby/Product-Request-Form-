@@ -1071,16 +1071,22 @@ async function getAddressComboById(id) {
   const combos = await loadAddressCombos();
   return combos.find(c => c.id === id);
 }
+let addressComboPreviewTimer = null;
 async function updateAddressComboPreview() {
   const id = document.getElementById('addressComboSelect').value;
   const preview = document.getElementById('addressComboPreview');
   const deleteBtn = document.getElementById('deleteAddressComboBtn');
+  clearTimeout(addressComboPreviewTimer);
   if (!id) { preview.textContent = ''; deleteBtn.style.display = 'none'; return; }
   const combo = await getAddressComboById(id);
   if (!combo) { preview.textContent = ''; deleteBtn.style.display = 'none'; return; }
   preview.textContent = `${combo.recipientName} — ${combo.addr1}${combo.addr2 ? ', ' + combo.addr2 : ''}, ${combo.city}, ${combo.state || combo.country} ${combo.zip}`;
   const requestorNow = document.getElementById('requestorName').value.trim().toLowerCase();
   deleteBtn.style.display = (requestorNow && requestorNow === combo.createdBy.toLowerCase()) ? 'inline' : 'none';
+  // Don't let this sit in the layout indefinitely — it's just a preview to
+  // confirm the pick before hitting Load, not something that needs to stay
+  // on screen (and it would otherwise keep the form taller permanently).
+  addressComboPreviewTimer = setTimeout(() => { preview.textContent = ''; }, 5000);
 }
 async function loadSelectedAddressCombo() {
   const id = document.getElementById('addressComboSelect').value;
@@ -1181,16 +1187,21 @@ async function getProductComboById(id) {
   const combos = await loadProductCombos();
   return combos.find(c => c.id === id);
 }
+let productComboPreviewTimer = null;
 async function updateProductComboPreview() {
   const id = document.getElementById('productComboSelect').value;
   const preview = document.getElementById('productComboPreview');
   const deleteBtn = document.getElementById('deleteProductComboBtn');
+  clearTimeout(productComboPreviewTimer);
   if (!id) { preview.textContent = ''; deleteBtn.style.display = 'none'; return; }
   const combo = await getProductComboById(id);
   if (!combo) { preview.textContent = ''; deleteBtn.style.display = 'none'; return; }
   preview.textContent = combo.lines.map(l => `${l.title} ×${l.qty}`).join(', ');
   const requestorNow = document.getElementById('requestorName').value.trim().toLowerCase();
   deleteBtn.style.display = (requestorNow && requestorNow === combo.createdBy.toLowerCase()) ? 'inline' : 'none';
+  // Same reasoning as the address preview — don't let it permanently add
+  // height to the form, just show it long enough to confirm the pick.
+  productComboPreviewTimer = setTimeout(() => { preview.textContent = ''; }, 5000);
 }
 async function loadSelectedProductCombo() {
   const id = document.getElementById('productComboSelect').value;
