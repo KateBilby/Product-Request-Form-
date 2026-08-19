@@ -1149,7 +1149,7 @@ async function saveCurrentAsAddressCombo() {
   document.getElementById('addressComboSelect').value = combo.id;
   updateAddressComboPreview();
 
-  msg.textContent = ok ? `Saved "${combo.name}" — it'll show up in the dropdown for anyone on the team.` : 'Could not save — check your connection and try again.';
+  msg.textContent = ok ? `Saved "${combo.name}" — it'll show up in your own dropdown next time (only you can see it).` : 'Could not save — check your connection and try again.';
   msg.style.color = ok ? 'var(--ok)' : 'var(--rush)';
   setTimeout(() => { msg.textContent = ''; }, 6000);
 }
@@ -1256,7 +1256,7 @@ async function saveCurrentAsProductCombo() {
   document.getElementById('productComboSelect').value = combo.id;
   updateProductComboPreview();
 
-  msg.textContent = ok ? `Saved "${combo.name}" — it'll show up in the dropdown for anyone on the team.` : 'Could not save — check your connection and try again.';
+  msg.textContent = ok ? `Saved "${combo.name}" — it'll show up in your own dropdown next time (only you can see it).` : 'Could not save — check your connection and try again.';
   msg.style.color = ok ? 'var(--ok)' : 'var(--rush)';
   setTimeout(() => { msg.textContent = ''; }, 6000);
 }
