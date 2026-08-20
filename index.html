@@ -196,6 +196,7 @@
     <div style="display:flex;">
       <button class="tab active" data-tab="submit">Submit Request</button>
       <button class="tab" data-tab="queue">Today's Queue</button>
+      <button class="tab" data-tab="tracking">Tracking</button>
     </div>
     <div id="sessionCounter" style="font-size:11.5px; color: var(--muted); padding-bottom: 10px; display:none;"></div>
   </div>
@@ -405,6 +406,25 @@
     </div>
     <div id="queueContainer"></div>
     <div class="footnote">Next Day orders are pinned to the top and shaded red; 2-Day orders are shaded amber. Export generates a CSV in your Manual Order template's exact column format — each order keeps all its line items grouped under one Order Number.</div>
+  </div>
+
+  <!-- TRACKING VIEW -->
+  <div class="view" id="view-tracking">
+    <div class="card" style="max-width:480px;">
+      <h2>Add Tracking</h2>
+      <div class="field" id="f-po-number">
+        <label>PO / Order Number</label>
+        <input type="text" id="trackingPoNumber" placeholder="e.g. Jordan A 8-20_ops">
+        <div class="hint">This is the "Order Number" column from the exported Manual Order CSV — every line item under it gets tagged with the tracking number below.</div>
+      </div>
+      <div class="field" id="f-tracking-number">
+        <label>Tracking Number</label>
+        <input type="text" id="trackingNumberInput" placeholder="e.g. 1Z999AA10123456784">
+      </div>
+      <button type="button" class="submit-btn" id="addTrackingBtn">Save &amp; Notify</button>
+      <div class="hint" id="trackingMsg" style="margin-top:10px;"></div>
+    </div>
+    <div class="footnote">If an Airtable Automation is set up to watch the Tracking Number field, the requestor's email on file gets notified automatically once this is saved.</div>
   </div>
 </div>
 
@@ -694,6 +714,8 @@ function init() {
       if (tab.dataset.tab === 'queue') renderQueue();
     });
   });
+
+  document.getElementById('addTrackingBtn').addEventListener('click', addTracking);
 
   document.querySelectorAll('.speed-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1614,11 +1636,16 @@ async function exportCSV() {
   toExport.forEach(r => { const k = orderNumbers[r.id].key; keyTotals[k] = (keyTotals[k]||0)+1; });
 
   const rows = [HEADERS.map(csvCell).join(',')];
+  // Persist each order's PO/Order Number back to Airtable as we export it,
+  // so it's a stable value the PO can look up later to attach tracking —
+  // otherwise this label only ever existed inside the downloaded CSV file.
+  const poAssignments = [];
 
   toExport.forEach(r => {
     const info = orderNumbers[r.id];
     const label = keyTotals[info.key] > 1 ? `${info.firstName}${idxToLetters(info.idx)}` : info.firstName;
     const orderNumber = `${label} ${info.dateKey}_ops`;
+    poAssignments.push({ orderId: r.id, poNumber: orderNumber });
 
     r.lines.forEach((line, i) => {
       const row = [
@@ -1682,6 +1709,52 @@ async function exportCSV() {
   a.click();
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
+
+  try {
+    await withRetry(() => relayFetch('/api/tracker/assign-po-numbers', {
+      method: 'POST',
+      body: JSON.stringify({ assignments: poAssignments })
+    }));
+  } catch (e) {
+    console.error('Could not save PO Numbers back to Airtable', e);
+    alert("The CSV downloaded fine, but couldn't save the PO Numbers back to Airtable — tracking lookups for this batch may not work until that's retried.");
+  }
+}
+
+// ================= Tracking =================
+async function addTracking() {
+  const poNumber = document.getElementById('trackingPoNumber').value.trim();
+  const trackingNumber = document.getElementById('trackingNumberInput').value.trim();
+  const msg = document.getElementById('trackingMsg');
+  const btn = document.getElementById('addTrackingBtn');
+
+  if (!poNumber || !trackingNumber) {
+    msg.textContent = 'Enter both the PO/Order Number and the tracking number.';
+    msg.style.color = 'var(--rush)';
+    return;
+  }
+
+  btn.disabled = true;
+  msg.textContent = 'Saving…';
+  msg.style.color = 'var(--muted)';
+  try {
+    const data = await relayFetch('/api/tracker/add-tracking', {
+      method: 'POST',
+      body: JSON.stringify({ poNumber, trackingNumber })
+    });
+    msg.textContent = `Saved — tagged ${data.updated} line item${data.updated === 1 ? '' : 's'} under "${poNumber}".`;
+    msg.style.color = 'var(--ok)';
+    document.getElementById('trackingPoNumber').value = '';
+    document.getElementById('trackingNumberInput').value = '';
+  } catch (e) {
+    console.error('addTracking failed', e);
+    msg.textContent = e.message.includes('404')
+      ? `No rows found with PO/Order Number "${poNumber}" — double-check it against the exported CSV.`
+      : 'Could not save — check your connection and try again.';
+    msg.style.color = 'var(--rush)';
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 init();
