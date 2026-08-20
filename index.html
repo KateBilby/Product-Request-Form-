@@ -1250,6 +1250,7 @@ async function loadRequests() {
           id,
           ts: row['Timestamp'],
           requestorName: row['Requestor Name'] || '',
+          requestorEmail: row['Requestor Email'] || '',
           reasonCode: row['Reason Code'] || '',
           speed: SPEED_VALUE[row['Shipping Speed']] || 'standard',
           recipientName: row['Recipient Name'] || '',
