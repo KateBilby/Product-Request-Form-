@@ -421,10 +421,21 @@
         <label>Tracking Number</label>
         <input type="text" id="trackingNumberInput" placeholder="e.g. 1Z999AA10123456784">
       </div>
-      <button type="button" class="submit-btn" id="addTrackingBtn">Save &amp; Notify</button>
+      <button type="button" class="submit-btn" id="addTrackingBtn">Save</button>
       <div class="hint" id="trackingMsg" style="margin-top:10px;"></div>
     </div>
-    <div class="footnote">If an Airtable Automation is set up to watch the Tracking Number field, the requestor's email on file gets notified automatically once this is saved.</div>
+
+    <div class="card" style="max-width:600px;">
+      <h2>Bulk Import Tracking CSV</h2>
+      <div class="field" id="f-tracking-csv">
+        <label>Tracking Export CSV</label>
+        <input type="file" id="trackingCsvInput" accept=".csv">
+        <div class="hint">Expects a "Shipment Ref#" column (matches PO/Order Number) and a "Tracking No" column — the same format your 3PL's Order QueryBy Order export uses. Multiple rows sharing a Shipment Ref# (multi-package orders) get combined into one tracking value automatically.</div>
+      </div>
+      <button type="button" class="submit-btn" id="uploadTrackingCsvBtn">Upload &amp; Match</button>
+      <div id="trackingCsvResults" style="margin-top:14px; font-size:12.5px; line-height:1.5;"></div>
+    </div>
+    <div class="footnote">Tracking saved here (either way) is what an Airtable Automation, if set up, can act on.</div>
   </div>
 </div>
 
@@ -716,6 +727,7 @@ function init() {
   });
 
   document.getElementById('addTrackingBtn').addEventListener('click', addTracking);
+  document.getElementById('uploadTrackingCsvBtn').addEventListener('click', uploadTrackingCsv);
 
   document.querySelectorAll('.speed-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1754,6 +1766,97 @@ async function addTracking() {
     msg.style.color = 'var(--rush)';
   } finally {
     btn.disabled = false;
+  }
+}
+
+// Minimal but correct CSV parser — handles quoted fields containing commas
+// (e.g. "Vicarage Lane, Charing Heath") and escaped quotes, which a plain
+// split(',') would mangle. Real 3PL export files use exactly this quoting.
+function parseCSV(text) {
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\r') { /* skip, \n handles the line break */ }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else field += c;
+    }
+  }
+  if (field.length > 0 || row.length > 0) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.some(v => v.trim() !== ''));
+}
+
+async function uploadTrackingCsv() {
+  const fileInput = document.getElementById('trackingCsvInput');
+  const resultsEl = document.getElementById('trackingCsvResults');
+  const file = fileInput.files[0];
+  if (!file) { resultsEl.textContent = 'Choose a CSV file first.'; resultsEl.style.color = 'var(--rush)'; return; }
+
+  const text = await file.text();
+  const rows = parseCSV(text);
+  if (rows.length < 2) { resultsEl.textContent = 'That file looks empty.'; resultsEl.style.color = 'var(--rush)'; return; }
+
+  const headers = rows[0].map(h => h.trim());
+  const refIdx = headers.findIndex(h => h.toLowerCase().includes('shipment ref'));
+  const trackingIdx = headers.findIndex(h => h.toLowerCase().includes('tracking no'));
+  if (refIdx === -1 || trackingIdx === -1) {
+    resultsEl.textContent = 'Could not find a "Shipment Ref#" and/or "Tracking No" column in this file.';
+    resultsEl.style.color = 'var(--rush)';
+    return;
+  }
+
+  // Multiple rows can share a Shipment Ref# (multi-package orders, or the
+  // export listing one line per case) — combine every distinct tracking
+  // number seen for that order into one value instead of overwriting.
+  const byRef = new Map();
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const ref = (r[refIdx] || '').trim();
+    const tracking = (r[trackingIdx] || '').trim();
+    if (!ref || !tracking) continue;
+    if (!byRef.has(ref)) byRef.set(ref, new Set());
+    byRef.get(ref).add(tracking);
+  }
+
+  const entries = Array.from(byRef.entries()).map(([poNumber, trackingSet]) => ({
+    poNumber,
+    trackingNumber: Array.from(trackingSet).join(', ')
+  }));
+
+  if (entries.length === 0) {
+    resultsEl.textContent = 'No rows with both a Shipment Ref# and a Tracking No were found.';
+    resultsEl.style.color = 'var(--rush)';
+    return;
+  }
+
+  resultsEl.textContent = `Matching ${entries.length} order${entries.length === 1 ? '' : 's'}…`;
+  resultsEl.style.color = 'var(--muted)';
+
+  try {
+    const data = await relayFetch('/api/tracker/add-tracking-bulk', {
+      method: 'POST',
+      body: JSON.stringify({ entries })
+    });
+    const ok = data.results.filter(r => r.ok);
+    const failed = data.results.filter(r => !r.ok);
+    let html = `<strong>${ok.length} of ${data.results.length} matched and updated.</strong>`;
+    if (failed.length) {
+      html += `<br>Not found in the queue (${failed.length}): ${failed.map(f => escapeHtml(f.poNumber)).join(', ')}`;
+    }
+    resultsEl.innerHTML = html;
+    resultsEl.style.color = failed.length ? 'var(--amber)' : 'var(--ok)';
+  } catch (e) {
+    console.error('uploadTrackingCsv failed', e);
+    resultsEl.textContent = 'Could not reach the relay — check your connection and try again.';
+    resultsEl.style.color = 'var(--rush)';
   }
 }
 
