@@ -364,7 +364,7 @@
       </div>
 
       <div class="card">
-        <div class="field" style="margin-bottom:0;">
+        <div class="field" id="f-notes" style="margin-bottom:0;">
           <label>Notes / Instructions <span style="text-transform:none;font-weight:400;">(optional)</span></label>
           <textarea id="notes" placeholder="Delivery notes only. Quantities and shipping speed are captured above."></textarea>
           <div class="err">Remove any special characters flagged below</div>
@@ -1277,38 +1277,68 @@ function setInvalid(id, invalid) {
   document.getElementById(id).classList.toggle('invalid', invalid);
 }
 
+// Shows exactly what's blocking submission — a toast listing every problem
+// in plain language, plus jumping/scrolling straight to the first one so
+// it's not left to the person to go hunting for a red-bordered field that
+// might be scrolled off screen.
+function showValidationProblems(problems) {
+  if (problems.length === 0) return;
+  problems[0].el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  const focusable = problems[0].el.querySelector('input, select, textarea');
+  if (focusable) focusable.focus();
+
+  const toast = document.getElementById('toast');
+  toast.innerHTML = `<strong>Please fix before submitting:</strong> ${problems.map(p => escapeHtml(p.label)).join(', ')}`;
+  toast.style.background = '#FBEAE8';
+  toast.style.color = 'var(--rush)';
+  toast.style.borderColor = '#E8B4AF';
+  toast.classList.add('show');
+  setTimeout(() => {
+    toast.classList.remove('show');
+    toast.style.background = ''; toast.style.color = ''; toast.style.borderColor = '';
+  }, 7000);
+}
+
 async function onSubmit(e) {
   e.preventDefault();
   let valid = true;
+  const problems = [];
 
   const requestorName = document.getElementById('requestorName').value.trim();
-  setInvalid('f-requestor', !requestorName || findBadChars(requestorName).length > 0);
-  if (!requestorName || findBadChars(requestorName).length > 0) valid = false;
+  const requestorNameInvalid = !requestorName || findBadChars(requestorName).length > 0;
+  setInvalid('f-requestor', requestorNameInvalid);
+  if (requestorNameInvalid) { valid = false; problems.push({ el: document.getElementById('f-requestor'), label: 'Your Name' }); }
 
   const requestorEmail = document.getElementById('requestorEmail').value.trim();
   const requestorEmailInvalid = !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requestorEmail);
   setInvalid('f-requestor-email', requestorEmailInvalid);
-  if (requestorEmailInvalid) valid = false;
+  if (requestorEmailInvalid) { valid = false; problems.push({ el: document.getElementById('f-requestor-email'), label: 'Your Email' }); }
 
   const reasonCode = document.getElementById('reasonCode').value;
 
   const speed = document.getElementById('f-speed').dataset.value;
-  setInvalid('f-speed', !speed); if (!speed) valid = false;
+  const speedInvalid = !speed;
+  setInvalid('f-speed', speedInvalid);
+  if (speedInvalid) { valid = false; problems.push({ el: document.getElementById('f-speed'), label: 'Shipping Speed' }); }
 
   const recipientName = document.getElementById('recipientName').value.trim();
-  setInvalid('f-recipient', !recipientName || findBadChars(recipientName).length > 0);
-  if (!recipientName || findBadChars(recipientName).length > 0) valid = false;
+  const recipientNameInvalid = !recipientName || findBadChars(recipientName).length > 0;
+  setInvalid('f-recipient', recipientNameInvalid);
+  if (recipientNameInvalid) { valid = false; problems.push({ el: document.getElementById('f-recipient'), label: 'Recipient Name' }); }
 
   const addr1 = document.getElementById('addr1').value.trim();
-  setInvalid('f-addr1', !addr1 || findBadChars(addr1).length > 0);
-  if (!addr1 || findBadChars(addr1).length > 0) valid = false;
+  const addr1Invalid = !addr1 || findBadChars(addr1).length > 0;
+  setInvalid('f-addr1', addr1Invalid);
+  if (addr1Invalid) { valid = false; problems.push({ el: document.getElementById('f-addr1'), label: 'Street Address 1' }); }
 
   const addr2 = document.getElementById('addr2').value.trim();
-  if (findBadChars(addr2).length > 0) { setInvalid('f-addr2', true); valid = false; }
+  const addr2Invalid = findBadChars(addr2).length > 0;
+  if (addr2Invalid) { setInvalid('f-addr2', true); valid = false; problems.push({ el: document.getElementById('f-addr2'), label: 'Street Address 2' }); }
 
   const city = document.getElementById('city').value.trim();
-  setInvalid('f-city', !city || findBadChars(city).length > 0);
-  if (!city || findBadChars(city).length > 0) valid = false;
+  const cityInvalid = !city || findBadChars(city).length > 0;
+  setInvalid('f-city', cityInvalid);
+  if (cityInvalid) { valid = false; problems.push({ el: document.getElementById('f-city'), label: 'City' }); }
 
   const country = document.getElementById('country').value;
   const countryCode = country === 'OTHER' ? document.getElementById('countryOther').value.trim().toUpperCase() : country;
@@ -1316,7 +1346,8 @@ async function onSubmit(e) {
 
   const state = document.getElementById('state').value.trim().toUpperCase();
   const stateInvalid = isUS && !US_STATES.includes(state);
-  setInvalid('f-state', stateInvalid); if (stateInvalid) valid = false;
+  setInvalid('f-state', stateInvalid);
+  if (stateInvalid) { valid = false; problems.push({ el: document.getElementById('f-state'), label: 'State' }); }
 
   let zip = document.getElementById('zip').value.trim();
   if (!zip && NO_POSTAL_CODE_COUNTRIES.includes(countryCode)) {
@@ -1325,28 +1356,37 @@ async function onSubmit(e) {
   }
   const zipAlnum = zip.replace(/[\s-]/g, '');
   const zipInvalid = !zip || zipAlnum.length < 5 || !/^[A-Za-z0-9]+$/.test(zipAlnum);
-  setInvalid('f-zip', zipInvalid); if (zipInvalid) valid = false;
+  setInvalid('f-zip', zipInvalid);
+  if (zipInvalid) { valid = false; problems.push({ el: document.getElementById('f-zip'), label: 'Zip / Postal Code' }); }
 
   const notes = document.getElementById('notes').value.trim();
-  if (findBadChars(notes).length > 0) valid = false;
+  const notesInvalid = findBadChars(notes).length > 0;
+  setInvalid('f-notes', notesInvalid);
+  if (notesInvalid) { valid = false; problems.push({ el: document.getElementById('f-notes'), label: 'Notes' }); }
 
   // validate line items
   const lineRows = [...document.querySelectorAll('.line-row')];
   const lines = [];
-  lineRows.forEach(row => {
+  lineRows.forEach((row, i) => {
     const sku = row.dataset.selectedSku;
     const qtyInput = row.querySelector('.qty-input');
     const qty = parseInt(qtyInput.value, 10);
     const skuField = row.querySelector('.field.sku-field');
     const qtyField = row.querySelector('.field.qty-field');
     let rowValid = true;
-    if (!sku) { skuField.classList.add('invalid'); rowValid = false; } else { skuField.classList.remove('invalid'); }
-    if (!(qty > 0)) { qtyField.classList.add('invalid'); rowValid = false; } else { qtyField.classList.remove('invalid'); }
+    if (!sku) {
+      skuField.classList.add('invalid'); rowValid = false;
+      problems.push({ el: row, label: `Item ${i + 1}: choose a product` });
+    } else { skuField.classList.remove('invalid'); }
+    if (!(qty > 0)) {
+      qtyField.classList.add('invalid'); rowValid = false;
+      problems.push({ el: row, label: `Item ${i + 1}: enter a quantity` });
+    } else { qtyField.classList.remove('invalid'); }
     if (rowValid) lines.push({ sku, title: SKU_BY_CODE[sku.toUpperCase()].title, qty });
     else valid = false;
   });
 
-  if (!valid) return;
+  if (!valid) { showValidationProblems(problems); return; }
 
   const entry = {
     id: 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2,8),
