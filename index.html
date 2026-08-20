@@ -197,6 +197,7 @@
       <button class="tab active" data-tab="submit">Submit Request</button>
       <button class="tab" data-tab="queue">Today's Queue</button>
       <button class="tab" data-tab="tracking">Tracking</button>
+      <button class="tab" data-tab="status">Check Status</button>
     </div>
     <div id="sessionCounter" style="font-size:11.5px; color: var(--muted); padding-bottom: 10px; display:none;"></div>
   </div>
@@ -435,7 +436,21 @@
       <button type="button" class="submit-btn" id="uploadTrackingCsvBtn">Upload &amp; Match</button>
       <div id="trackingCsvResults" style="margin-top:14px; font-size:12.5px; line-height:1.5;"></div>
     </div>
-    <div class="footnote">Tracking saved here (either way) is what an Airtable Automation, if set up, can act on.</div>
+    <div class="footnote">Once tracking is saved here, requestors can look it up themselves on the "Check Status" tab — no email needed.</div>
+  </div>
+
+  <!-- STATUS CHECK VIEW -->
+  <div class="view" id="view-status">
+    <div class="card" style="max-width:480px;">
+      <h2>Check Order Status</h2>
+      <div class="field" id="f-status-po">
+        <label>PO / Order Number</label>
+        <input type="text" id="statusPoNumber" placeholder="e.g. Jordan A 8-20_ops">
+        <div class="hint">This is the "Order Number" from your submission confirmation, or from whoever placed the request on your behalf.</div>
+      </div>
+      <button type="button" class="submit-btn" id="checkStatusBtn">Check Status</button>
+      <div id="statusResults" style="margin-top:14px; font-size:13px; line-height:1.6;"></div>
+    </div>
   </div>
 </div>
 
@@ -728,6 +743,7 @@ function init() {
 
   document.getElementById('addTrackingBtn').addEventListener('click', addTracking);
   document.getElementById('uploadTrackingCsvBtn').addEventListener('click', uploadTrackingCsv);
+  document.getElementById('checkStatusBtn').addEventListener('click', checkStatus);
 
   document.querySelectorAll('.speed-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -1856,6 +1872,35 @@ async function uploadTrackingCsv() {
   } catch (e) {
     console.error('uploadTrackingCsv failed', e);
     resultsEl.textContent = 'Could not reach the relay — check your connection and try again.';
+    resultsEl.style.color = 'var(--rush)';
+  }
+}
+
+// ================= Self-serve status check =================
+async function checkStatus() {
+  const poNumber = document.getElementById('statusPoNumber').value.trim();
+  const resultsEl = document.getElementById('statusResults');
+  if (!poNumber) { resultsEl.textContent = 'Enter a PO/Order Number first.'; resultsEl.style.color = 'var(--rush)'; return; }
+
+  resultsEl.textContent = 'Checking…';
+  resultsEl.style.color = 'var(--muted)';
+  try {
+    const data = await relayFetch(`/api/tracker/lookup/${encodeURIComponent(poNumber)}`);
+    const itemsList = data.lines.map(l => `<li>${escapeHtml(l.sku)} — ${escapeHtml(l.title)} &times; ${l.qty}</li>`).join('');
+    let html = `<strong>Shipping to:</strong> ${escapeHtml(data.recipientName)}<br>`;
+    html += `<strong>Items:</strong><ul style="margin:4px 0 8px 18px;">${itemsList}</ul>`;
+    if (data.trackingNumber) {
+      html += `<strong style="color:var(--ok);">Tracking: ${escapeHtml(data.trackingNumber)}</strong>`;
+    } else {
+      html += `<span style="color:var(--muted);">No tracking number yet — check back later.</span>`;
+    }
+    resultsEl.innerHTML = html;
+    resultsEl.style.color = '';
+  } catch (e) {
+    console.error('checkStatus failed', e);
+    resultsEl.textContent = e.message.includes('404')
+      ? `No order found with PO/Order Number "${poNumber}" — double-check it against your confirmation.`
+      : 'Could not reach the relay — check your connection and try again.';
     resultsEl.style.color = 'var(--rush)';
   }
 }
