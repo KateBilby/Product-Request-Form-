@@ -206,12 +206,18 @@
 
       <div class="card">
         <h2>Requestor &amp; Shipping</h2>
-        <div class="row2">
+        <div class="row3">
           <div class="field" id="f-requestor">
             <label>Your Name (submitting this request)</label>
             <input type="text" id="requestorName" placeholder="e.g. Jordan Lee">
             <div class="hint">Stays filled in after you submit, so you can enter requests for several people back-to-back.</div>
             <div class="err">Required</div>
+          </div>
+          <div class="field" id="f-requestor-email">
+            <label>Your Email</label>
+            <input type="email" id="requestorEmail" placeholder="e.g. jordan.lee@lemmelive.com">
+            <div class="hint">Attached to this request, and used to keep your saved addresses/bundles separate from everyone else's.</div>
+            <div class="err">Enter a valid email address</div>
           </div>
           <div class="field" id="f-reason">
             <label>Reason Code <span style="text-transform:none;font-weight:400;">(optional)</span></label>
@@ -549,16 +555,15 @@ const ALLOWED_CHARS = /^[A-Za-z0-9\s\-.,'#\/&()]*$/;
 // table (grouped by Order ID) — no separate blob key needed for it anymore.
 // These three are still personal presets (recent recipients, saved
 // addresses, saved product bundles) — each person should only see their
-// own. There's no sign-in anymore, so "who's asking" is just whatever's
-// typed into the Requestor Name field — good enough for this team's scale,
-// though someone typing the exact same name as someone else would share
-// their presets (a known, accepted tradeoff — see userScopedKey below).
+// own. There's no sign-in anymore, so "who's asking" is whatever's typed
+// into the Your Email field — self-reported, not verified via login, but
+// far less collision-prone than a first/last name (see userScopedKey below).
 const RECIPIENT_KEY = "lemme-recent-recipients";
 const ADDRESS_COMBO_KEY = "lemme-saved-addresses";
 const PRODUCT_COMBO_KEY = "lemme-saved-product-bundles";
 function userScopedKey(baseKey) {
-  const name = (document.getElementById('requestorName')?.value || '').trim().toLowerCase();
-  return `${baseKey}::${name || 'anonymous'}`;
+  const email = (document.getElementById('requestorEmail')?.value || '').trim().toLowerCase();
+  return `${baseKey}::${email || 'anonymous'}`;
 }
 
 // ================= Product Request Desk — relay config =================
@@ -722,6 +727,7 @@ function init() {
   loadRecentRecipients().then(populateRecipientDatalist);
   document.getElementById('recipientName').addEventListener('blur', checkRecipientMatch);
   document.getElementById('requestorName').addEventListener('input', () => { updateAddressComboPreview(); updateProductComboPreview(); });
+  document.getElementById('requestorEmail').addEventListener('input', () => { populateAddressComboSelect(); populateProductComboSelect(); });
   document.getElementById('useRecipAddress').addEventListener('click', applyRecipientSuggestion);
   document.getElementById('dismissRecip').addEventListener('click', () => {
     document.getElementById('recipSuggestion').classList.remove('show');
@@ -932,13 +938,14 @@ async function deleteSelectedAddressCombo() {
 }
 async function saveCurrentAsAddressCombo() {
   const requestorName = document.getElementById('requestorName').value.trim();
+  const requestorEmail = document.getElementById('requestorEmail').value.trim();
   const recipientName = document.getElementById('recipientName').value.trim();
   const addr1 = document.getElementById('addr1').value.trim();
   const city = document.getElementById('city').value.trim();
   const zip = document.getElementById('zip').value.trim();
 
   const msg = document.getElementById('saveAddressMsg');
-  if (!requestorName) { msg.textContent = 'Enter your name first.'; msg.style.color = 'var(--rush)'; return; }
+  if (!requestorName || !requestorEmail) { msg.textContent = 'Enter your name and email first.'; msg.style.color = 'var(--rush)'; return; }
   if (!recipientName || !addr1 || !city || !zip) { msg.textContent = 'Fill in the recipient name and address before saving.'; msg.style.color = 'var(--rush)'; return; }
 
   const name = prompt('Name this address (e.g. "NYC Office" or "Jane Doe - Home"):');
@@ -1045,6 +1052,7 @@ async function deleteSelectedProductCombo() {
 }
 async function saveCurrentAsProductCombo() {
   const requestorName = document.getElementById('requestorName').value.trim();
+  const requestorEmail = document.getElementById('requestorEmail').value.trim();
   const lineRows = [...document.querySelectorAll('.line-row')];
   // Quantity defaults to 1 here if left blank — this is just a reusable template,
   // not a live order, so a missing qty shouldn't block saving it.
@@ -1057,7 +1065,7 @@ async function saveCurrentAsProductCombo() {
     });
 
   const msg = document.getElementById('saveProductMsg');
-  if (!requestorName) { msg.textContent = 'Enter your name first.'; msg.style.color = 'var(--rush)'; return; }
+  if (!requestorName || !requestorEmail) { msg.textContent = 'Enter your name and email first.'; msg.style.color = 'var(--rush)'; return; }
   if (lines.length === 0) { msg.textContent = 'Select at least one product from the search results before saving a bundle.'; msg.style.color = 'var(--rush)'; return; }
 
   const name = prompt('Name this product bundle (e.g. "Influencer Starter Kit" or "New Hire Welcome Box"):');
@@ -1276,6 +1284,11 @@ async function onSubmit(e) {
   setInvalid('f-requestor', !requestorName || findBadChars(requestorName).length > 0);
   if (!requestorName || findBadChars(requestorName).length > 0) valid = false;
 
+  const requestorEmail = document.getElementById('requestorEmail').value.trim();
+  const requestorEmailInvalid = !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(requestorEmail);
+  setInvalid('f-requestor-email', requestorEmailInvalid);
+  if (requestorEmailInvalid) valid = false;
+
   const reasonCode = document.getElementById('reasonCode').value;
 
   const speed = document.getElementById('f-speed').dataset.value;
@@ -1360,6 +1373,7 @@ async function onSubmit(e) {
     "Order ID": entry.id,
     Timestamp: entry.ts,
     "Requestor Name": requestorName,
+    "Requestor Email": requestorEmail,
     "Reason Code": reasonCode,
     "Shipping Speed": SPEED_LABEL[speed] || speed,
     "Recipient Name": recipientName,
@@ -1382,15 +1396,17 @@ async function onSubmit(e) {
     await saveRecentRecipient({ name: recipientName, addr1, addr2, city, state: entry.state, zip, country: entry.country, phone: entry.phone });
     populateRecipientDatalist(await loadRecentRecipients());
 
-    // Keep the requestor's own name + reason code filled in — only the
-    // recipient/address/product/shipping fields reset, so submitting several
-    // requests for different people back-to-back doesn't mean retyping your
-    // own info every time.
+    // Keep the requestor's own name, email, and reason code filled in — only
+    // the recipient/address/product/shipping fields reset, so submitting
+    // several requests for different people back-to-back doesn't mean
+    // retyping your own info every time.
     const keepRequestorName = requestorName;
+    const keepRequestorEmail = requestorEmail;
     const keepReasonCode = reasonCode;
 
     document.getElementById('requestForm').reset();
     document.getElementById('requestorName').value = keepRequestorName;
+    document.getElementById('requestorEmail').value = keepRequestorEmail;
     document.getElementById('reasonCode').value = keepReasonCode;
     document.querySelectorAll('.speed-btn').forEach(b => b.classList.remove('selected'));
     document.getElementById('f-speed').dataset.value = '';
