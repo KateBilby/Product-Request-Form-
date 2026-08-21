@@ -761,7 +761,14 @@ function init() {
   });
 
   document.getElementById('country').addEventListener('change', (e) => {
-    document.getElementById('f-countryOther').style.display = e.target.value === 'OTHER' ? 'block' : 'none';
+    const showOther = e.target.value === 'OTHER';
+    const otherField = document.getElementById('f-countryOther');
+    otherField.style.display = showOther ? 'block' : 'none';
+    if (showOther) {
+      const otherInput = document.getElementById('countryOther');
+      otherField.scrollIntoView({ block: 'nearest' });
+      setTimeout(() => otherInput.focus(), 0);
+    }
     applyCountryStateDefault(e.target.value);
     applyNoPostalCodeDefault(e.target.value);
   });
