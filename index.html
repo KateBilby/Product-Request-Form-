@@ -295,7 +295,7 @@
           <input type="text" id="recipientName" list="recent-recipients" placeholder="First and last name — e.g. Dana Runyon" autocomplete="off">
           <datalist id="recent-recipients"></datalist>
           <div class="hint">First and last name required — the warehouse can't process a single name or a nickname alone.</div>
-          <div class="err">Enter first and last name (exactly two words) — remove any special characters flagged below</div>
+          <div class="err">Enter first and last name — remove any special characters flagged below</div>
           <div class="recip-suggestion" id="recipSuggestion">
             We have a saved address for this name: <span id="recipSuggestionText"></span>.
             <div><button type="button" id="useRecipAddress">Use this address</button><button type="button" class="dismiss" id="dismissRecip">Dismiss</button></div>
@@ -896,9 +896,10 @@ function findBadChars(str) {
 }
 
 // The warehouse needs a clean first+last name to process a shipment —
-// exactly two words, no single names and no middle names/initials.
+// at least two words, so a bare single name won't pass. Middle
+// names/initials (e.g. "Dana M Runyon") are fine.
 function isFirstAndLastName(str) {
-  return str.trim().split(/\s+/).filter(Boolean).length === 2;
+  return str.trim().split(/\s+/).filter(Boolean).length >= 2;
 }
 function validateChars(fieldId) {
   const el = document.getElementById(fieldId);
@@ -1254,7 +1255,7 @@ function addRecipient() {
     <div class="field">
       <label>Recipient Name</label>
       <input type="text" class="recip-name" placeholder="First and last name — e.g. Dana Runyon">
-      <div class="err">Enter first and last name (exactly two words) — remove any special characters flagged below</div>
+      <div class="err">Enter first and last name — remove any special characters flagged below</div>
     </div>
     <div class="field">
       <label>Street Address 1</label>
