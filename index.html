@@ -17,6 +17,8 @@
     --rush-bg: #FBEAE8;
     --amber: #B8860B;
     --amber-bg: #FBF3DC;
+    --stale: #A38408;
+    --stale-bg: #FFF3B0;
     --ok: #3E7A4C;
     --mono: 'SF Mono', 'IBM Plex Mono', ui-monospace, 'Courier New', monospace;
     --sans: -apple-system, 'Segoe UI', 'Inter', Helvetica, Arial, sans-serif;
@@ -159,9 +161,11 @@
   td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
   tr.rush-row td { background: var(--rush-bg); }
   tr.twoday-row td { background: var(--amber-bg); }
+  tr.stale-row td { background: var(--stale-bg); }
   tr:last-child td { border-bottom: none; }
   .badge-rush { display: inline-block; background: var(--rush); color: #fff; font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 100px; letter-spacing: 0.04em; }
   .badge-2day { display: inline-block; background: var(--amber); color: #fff; font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 100px; letter-spacing: 0.04em; }
+  .badge-stale { display: inline-block; background: var(--stale); color: #fff; font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 100px; letter-spacing: 0.04em; }
   .badge-flag { display: inline-block; background: #FDEFC8; color: #7A5B00; font-size: 10px; font-weight: 800; padding: 2px 7px; border-radius: 100px; letter-spacing: 0.04em; }
   .sku-chip { font-family: var(--mono); font-size: 11.5px; font-weight: 700; }
   .row-action { font-size: 11.5px; color: var(--muted); cursor: pointer; text-decoration: underline; margin-right: 8px; background: none; border: none; padding: 0; font-family: var(--sans); }
@@ -407,7 +411,7 @@
       </div>
     </div>
     <div id="queueContainer"></div>
-    <div class="footnote">Next Day orders are pinned to the top and shaded red; 2-Day orders are shaded amber. Export generates a CSV in your Manual Order template's exact column format — each order keeps all its line items grouped under one Order Number. "Archive &amp; Clear" downloads a permanent CSV snapshot of processed orders 7+ days old, then removes just those from the live table — this is what keeps Airtable's free-tier row cap from ever becoming a problem.</div>
+    <div class="footnote">Next Day orders are pinned to the top and shaded red; 2-Day orders are shaded amber. An unprocessed order from a previous day is shaded yellow and marked "NOT TODAY" — it never disappears from this view just because a day passed, even with "Show all days" unchecked. Export generates a CSV in your Manual Order template's exact column format — each order keeps all its line items grouped under one Order Number. "Archive &amp; Clear" downloads a permanent CSV snapshot of processed orders 7+ days old, then removes just those from the live table — this is what keeps Airtable's free-tier row cap from ever becoming a problem.</div>
   </div>
 
   <!-- TRACKING VIEW -->
@@ -1547,7 +1551,11 @@ async function renderQueue() {
   const reasonFilter = document.getElementById('filterReason').value;
   const requestorFilter = document.getElementById('filterRequestor').value.trim().toLowerCase();
 
-  let filtered = list.filter(r => (showAll || isToday(r.ts)) && (showProcessed || !r.processed));
+  // Unprocessed orders never get buried by the day filter — an order
+  // submitted yesterday and never marked done stays visible indefinitely,
+  // regardless of "Show all days." Only already-processed orders respect
+  // the today/show-all-days toggle (nothing left to act on there).
+  let filtered = list.filter(r => !r.processed || ((showAll || isToday(r.ts)) && showProcessed));
   if (reasonFilter === '__none__') {
     filtered = filtered.filter(r => !r.reasonCode);
   } else if (reasonFilter) {
@@ -1575,13 +1583,20 @@ async function renderQueue() {
   }
 
   const rows = filtered.map(r => {
-    const time = new Date(r.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+    // An unprocessed order still sitting from a previous day is exactly
+    // the "buried" case being flagged for — highlight it yellow and stamp
+    // the date on it (not just the time) so it reads as overdue at a glance.
+    const isStale = !r.processed && !isToday(r.ts);
+    const time = isStale
+      ? `${new Date(r.ts).toLocaleDateString([], { month: 'numeric', day: 'numeric' })} ${new Date(r.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      : new Date(r.ts).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
     const addrIssue = (!r.zip || (r.country === 'US' && !r.state));
-    const rowClass = r.speed === 'nextday' ? 'rush-row' : (r.speed === '2day' ? 'twoday-row' : '');
+    const rowClass = isStale ? 'stale-row' : (r.speed === 'nextday' ? 'rush-row' : (r.speed === '2day' ? 'twoday-row' : ''));
     const speedBadge = r.speed === 'nextday' ? '<span class="badge-rush">NEXT DAY</span>' : (r.speed === '2day' ? '<span class="badge-2day">2-DAY</span>' : '');
+    const staleBadge = isStale ? '<span class="badge-stale">NOT TODAY</span>' : '';
     const itemsList = r.lines.map(l => `<li><span class="sku-chip">${escapeHtml(l.sku)}</span> ${escapeHtml(l.title)} &times; ${l.qty}</li>`).join('');
     return `<tr class="${rowClass}">
-      <td>${time}${speedBadge ? '<br>' + speedBadge : ''}</td>
+      <td>${time}${speedBadge ? '<br>' + speedBadge : ''}${staleBadge ? '<br>' + staleBadge : ''}</td>
       <td>${escapeHtml(r.requestorName)}<br><span style="color:var(--muted);font-size:11.5px;">${escapeHtml(r.reasonCode) || '—'}</span></td>
       <td>${escapeHtml(r.recipientName)}<br><span style="color:var(--muted);font-size:11.5px;">${escapeHtml(r.city)}, ${escapeHtml(r.state)} ${escapeHtml(r.zip)}</span></td>
       <td><ul class="line-item-list">${itemsList}</ul></td>
