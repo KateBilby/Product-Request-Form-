@@ -107,7 +107,8 @@
 
   /* ---- Line items ---- */
   #linesContainer { display: flex; flex-direction: column; gap: 14px; }
-  .line-row { border: 1px solid var(--line); border-radius: 9px; padding: 14px; background: #FCFCFA; }
+  #extraRecipientsContainer { display: flex; flex-direction: column; gap: 14px; }
+  .line-row, .recipient-row { border: 1px solid var(--line); border-radius: 9px; padding: 14px; background: #FCFCFA; }
   .line-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
   .line-header .line-num { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
   .remove-line { font-size: 11.5px; color: var(--rush); background: none; border: none; cursor: pointer; text-decoration: underline; font-family: var(--sans); }
@@ -364,6 +365,13 @@
           <span class="hint" id="saveAddressMsg" style="margin:0;"></span>
         </div>
       </div>
+
+      <div class="card" id="extraRecipientsCard" style="display:none;">
+        <h2>Additional Recipients</h2>
+        <div class="hint" style="margin-top:-6px;">Same products/quantities below will go to each of these too — as separate orders, each with its own PO and tracking, so nothing gets jumbled together.</div>
+        <div id="extraRecipientsContainer"></div>
+      </div>
+      <button type="button" class="btn-secondary" id="addRecipientBtn" style="margin: -6px 0 18px;">+ Add another recipient (bulk order, same items)</button>
 
       <div class="card">
         <h2>Products</h2>
@@ -825,6 +833,7 @@ function init() {
   loadAddressCombos().then(populateAddressComboSelect);
   document.getElementById('addressComboSelect').addEventListener('change', updateAddressComboPreview);
   document.getElementById('loadAddressComboBtn').addEventListener('click', loadSelectedAddressCombo);
+  document.getElementById('addRecipientBtn').addEventListener('click', addRecipient);
   document.getElementById('deleteAddressComboBtn').addEventListener('click', deleteSelectedAddressCombo);
   document.getElementById('saveAddressComboBtn').addEventListener('click', saveCurrentAsAddressCombo);
 
@@ -849,8 +858,10 @@ function init() {
   renderQueue();
 }
 
-function applyCountryStateDefault(countryCode) {
-  const stateField = document.getElementById('state');
+// stateField/stateWrap default to the primary Ship To card, but an
+// additional-recipient row (see addRecipient()) passes its own scoped
+// elements in so the same logic applies to every recipient, not just #1.
+function applyCountryStateDefault(countryCode, stateField = document.getElementById('state'), stateWrap = document.getElementById('f-state')) {
   if (countryCode === 'US') {
     // switching back to US — clear an international region code so it isn't
     // mistaken for a US state; the datalist takes over from here.
@@ -862,18 +873,18 @@ function applyCountryStateDefault(countryCode) {
   const suggested = COUNTRY_STATE_DEFAULT[countryCode];
   if (suggested) {
     stateField.value = suggested;
-    document.getElementById('f-state').classList.remove('invalid');
+    stateWrap.classList.remove('invalid');
   }
 }
 
 // If the destination country has no postal code system and the field is
 // still empty, fill in the "00000" placeholder convention so it's never
-// left blank or guessed at.
-function applyNoPostalCodeDefault(countryCode) {
-  const zipField = document.getElementById('zip');
+// left blank or guessed at. zipField/zipWrap default to the primary card;
+// an additional-recipient row passes its own scoped elements.
+function applyNoPostalCodeDefault(countryCode, zipField = document.getElementById('zip'), zipWrap = document.getElementById('f-zip')) {
   if (NO_POSTAL_CODE_COUNTRIES.includes(countryCode) && !zipField.value.trim()) {
     zipField.value = '00000';
-    document.getElementById('f-zip').classList.remove('invalid');
+    zipWrap.classList.remove('invalid');
   }
 }
 
@@ -1214,6 +1225,116 @@ function renumberLines() {
     row.querySelector('.remove-line').style.display = document.querySelectorAll('.line-row').length > 1 ? 'inline' : 'none';
   });
 }
+
+// ============ Additional recipients (bulk orders) ============
+// Same product lines above, shipped to more than one address in one pass.
+// Each recipient still becomes its OWN Order ID/row set on submit — see
+// onSubmit() — so PO numbers and tracking never get jumbled across
+// destinations even though the data entry happens in a single form.
+let recipientCounter = 0;
+function addRecipient() {
+  recipientCounter++;
+  const id = 'recip_' + recipientCounter;
+  const countryOptionsHtml = document.getElementById('country').innerHTML;
+  const wrap = document.createElement('div');
+  wrap.className = 'recipient-row';
+  wrap.dataset.recipId = id;
+  wrap.innerHTML = `
+    <div class="line-header">
+      <span class="line-num">Recipient</span>
+      <button type="button" class="remove-line remove-recipient">Remove</button>
+    </div>
+    <div class="field">
+      <label>Recipient Name</label>
+      <input type="text" class="recip-name" placeholder="Who is this shipping to?">
+      <div class="err">Required — remove any special characters flagged below</div>
+    </div>
+    <div class="field">
+      <label>Street Address 1</label>
+      <input type="text" class="recip-addr1" placeholder="House/building number and street only">
+      <div class="err">Required — remove any special characters flagged below</div>
+    </div>
+    <div class="field">
+      <label>Address 2 <span style="text-transform:none;font-weight:400;">(unit / apt / floor / suite — optional)</span></label>
+      <input type="text" class="recip-addr2" placeholder="Apt 4B, Suite 200, etc.">
+      <div class="err">Remove any special characters flagged below</div>
+    </div>
+    <div class="row3">
+      <div class="field">
+        <label>City</label>
+        <input type="text" class="recip-city">
+        <div class="err">Required — remove any special characters flagged below</div>
+      </div>
+      <div class="field">
+        <label>State</label>
+        <input type="text" class="recip-state" placeholder="e.g. NY" style="text-transform:uppercase;">
+        <div class="err">Enter a valid 2-letter US state code</div>
+      </div>
+      <div class="field">
+        <label>Zip / Postal Code</label>
+        <input type="text" class="recip-zip" placeholder="90210 or SW12 0NW">
+        <div class="err">Enter at least 5 characters (letters and/or numbers are both fine)</div>
+      </div>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label>Country</label>
+        <select class="recip-country">${countryOptionsHtml}</select>
+      </div>
+      <div class="field recip-country-other-field" style="display:none;">
+        <label>Country Code</label>
+        <input type="text" class="recip-country-other" placeholder="2-letter code" maxlength="2">
+      </div>
+      <div class="field">
+        <label>Phone <span style="text-transform:none;font-weight:400;">(optional)</span></label>
+        <input type="tel" class="recip-phone" placeholder="XXX-XXX-XXXX">
+      </div>
+    </div>`;
+  document.getElementById('extraRecipientsContainer').appendChild(wrap);
+  document.getElementById('extraRecipientsCard').style.display = 'block';
+  renumberRecipients();
+  wireRecipient(wrap);
+  wrap.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  wrap.querySelector('.recip-name').focus();
+}
+function renumberRecipients() {
+  // "Recipient 1" is the primary Ship To card above, so these start at 2.
+  document.querySelectorAll('.recipient-row').forEach((row, i) => {
+    row.querySelector('.line-num').textContent = 'Recipient ' + (i + 2);
+  });
+}
+function wireRecipient(row) {
+  row.querySelector('.remove-recipient').addEventListener('click', () => {
+    row.remove();
+    renumberRecipients();
+    if (!document.querySelectorAll('.recipient-row').length) {
+      document.getElementById('extraRecipientsCard').style.display = 'none';
+    }
+  });
+  const countrySelect = row.querySelector('.recip-country');
+  const otherField = row.querySelector('.recip-country-other-field');
+  const otherInput = row.querySelector('.recip-country-other');
+  const stateInput = row.querySelector('.recip-state');
+  const stateWrap = stateInput.closest('.field');
+  const zipInput = row.querySelector('.recip-zip');
+  const zipWrap = zipInput.closest('.field');
+  countrySelect.addEventListener('change', (e) => {
+    const showOther = e.target.value === 'OTHER';
+    otherField.style.display = showOther ? 'block' : 'none';
+    if (showOther) {
+      otherField.scrollIntoView({ block: 'nearest' });
+      setTimeout(() => otherInput.focus(), 0);
+    }
+    const code = showOther ? otherInput.value.trim().toUpperCase() : e.target.value;
+    applyCountryStateDefault(code, stateInput, stateWrap);
+    applyNoPostalCodeDefault(code, zipInput, zipWrap);
+  });
+  otherInput.addEventListener('input', (e) => {
+    const code = e.target.value.trim().toUpperCase();
+    applyCountryStateDefault(code, stateInput, stateWrap);
+    applyNoPostalCodeDefault(code, zipInput, zipWrap);
+  });
+}
 function wireLine(row) {
   const input = row.querySelector('.sku-search-input');
   const results = row.querySelector('.sku-results');
@@ -1445,6 +1566,66 @@ async function onSubmit(e) {
   setInvalid('f-zip', zipInvalid);
   if (zipInvalid) { valid = false; problems.push({ el: document.getElementById('f-zip'), label: 'Zip / Postal Code' }); }
 
+  // Additional recipients (bulk orders) — same address rules as the
+  // primary Ship To card above, just scoped to each row instead of by id.
+  const extraRecipients = [];
+  document.querySelectorAll('.recipient-row').forEach((row, i) => {
+    const label = `Recipient ${i + 2}`;
+
+    const rName = row.querySelector('.recip-name').value.trim();
+    const rNameField = row.querySelector('.recip-name').closest('.field');
+    const rNameInvalid = !rName || findBadChars(rName).length > 0;
+    rNameField.classList.toggle('invalid', rNameInvalid);
+    if (rNameInvalid) { valid = false; problems.push({ el: rNameField, label: `${label}: Name` }); }
+
+    const rAddr1 = row.querySelector('.recip-addr1').value.trim();
+    const rAddr1Field = row.querySelector('.recip-addr1').closest('.field');
+    const rAddr1Invalid = !rAddr1 || findBadChars(rAddr1).length > 0;
+    rAddr1Field.classList.toggle('invalid', rAddr1Invalid);
+    if (rAddr1Invalid) { valid = false; problems.push({ el: rAddr1Field, label: `${label}: Street Address 1` }); }
+
+    const rAddr2 = row.querySelector('.recip-addr2').value.trim();
+    const rAddr2Field = row.querySelector('.recip-addr2').closest('.field');
+    const rAddr2Invalid = findBadChars(rAddr2).length > 0;
+    rAddr2Field.classList.toggle('invalid', rAddr2Invalid);
+    if (rAddr2Invalid) { valid = false; problems.push({ el: rAddr2Field, label: `${label}: Street Address 2` }); }
+
+    const rCity = row.querySelector('.recip-city').value.trim();
+    const rCityField = row.querySelector('.recip-city').closest('.field');
+    const rCityInvalid = !rCity || findBadChars(rCity).length > 0;
+    rCityField.classList.toggle('invalid', rCityInvalid);
+    if (rCityInvalid) { valid = false; problems.push({ el: rCityField, label: `${label}: City` }); }
+
+    const rCountrySel = row.querySelector('.recip-country').value;
+    const rCountryCode = rCountrySel === 'OTHER' ? row.querySelector('.recip-country-other').value.trim().toUpperCase() : rCountrySel;
+    const rIsUS = rCountryCode === 'US';
+
+    const rState = row.querySelector('.recip-state').value.trim().toUpperCase();
+    const rStateField = row.querySelector('.recip-state').closest('.field');
+    const rStateInvalid = rIsUS && !US_STATES.includes(rState);
+    rStateField.classList.toggle('invalid', rStateInvalid);
+    if (rStateInvalid) { valid = false; problems.push({ el: rStateField, label: `${label}: State` }); }
+
+    const rZipInput = row.querySelector('.recip-zip');
+    let rZip = rZipInput.value.trim();
+    if (!rZip && NO_POSTAL_CODE_COUNTRIES.includes(rCountryCode)) {
+      rZip = '00000';
+      rZipInput.value = rZip;
+    }
+    const rZipAlnum = rZip.replace(/[\s-]/g, '');
+    const rZipField = rZipInput.closest('.field');
+    const rZipInvalid = !rZip || rZipAlnum.length < 5 || !/^[A-Za-z0-9]+$/.test(rZipAlnum);
+    rZipField.classList.toggle('invalid', rZipInvalid);
+    if (rZipInvalid) { valid = false; problems.push({ el: rZipField, label: `${label}: Zip / Postal Code` }); }
+
+    extraRecipients.push({
+      recipientName: rName, addr1: rAddr1, addr2: rAddr2, city: rCity,
+      state: rIsUS ? rState : (rState || ''),
+      zip: rZip, country: rCountryCode || '',
+      phone: row.querySelector('.recip-phone').value.trim()
+    });
+  });
+
   const notes = document.getElementById('notes').value.trim();
   const notesInvalid = findBadChars(notes).length > 0;
   setInvalid('f-notes', notesInvalid);
@@ -1474,53 +1655,71 @@ async function onSubmit(e) {
 
   if (!valid) { showValidationProblems(problems); return; }
 
+  const primaryRecipient = {
+    recipientName, addr1, addr2, city,
+    state: isUS ? state : (state || ''),
+    zip,
+    country: countryCode || '',
+    phone: document.getElementById('phone').value.trim()
+  };
+  // Primary Ship To card first, then any additional recipients added for a
+  // bulk order — same product lines, different destinations.
+  const allRecipients = [primaryRecipient, ...extraRecipients];
+  const nowIso = new Date().toISOString();
+  const orderIds = allRecipients.map(() => 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2,8));
+
+  // Kept for saveRecentRecipient / the post-submit reset below, both of
+  // which only ever deal with the primary Ship To card.
   const entry = {
-    id: 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2,8),
-    ts: new Date().toISOString(),
+    id: orderIds[0],
+    ts: nowIso,
     requestorName,
     reasonCode,
     speed,
     deliverBy: document.getElementById('deliverBy').value || '',
-    recipientName,
-    addr1, addr2, city,
-    state: isUS ? state : (state || ''),
-    zip,
-    country: countryCode || '',
-    phone: document.getElementById('phone').value.trim(),
+    ...primaryRecipient,
     notes,
     lines,
     processed: false
   };
 
   usedLocalFallback = false;
-  // One row per SKU line, all sharing the same Order ID — this single write
-  // is both the live shared queue entry and the historical record, since
-  // both now come from the same Requests table in Airtable.
-  const trackerRows = lines.map(l => ({
-    "Order ID": entry.id,
-    Timestamp: entry.ts,
-    "Requestor Name": requestorName,
-    "Requestor Email": requestorEmail,
-    "Reason Code": reasonCode,
-    "Shipping Speed": SPEED_LABEL[speed] || speed,
-    "Recipient Name": recipientName,
-    "Street Address 1": addr1,
-    "Street Address 2": addr2,
-    City: city,
-    State: entry.state,
-    Zip: zip,
-    Country: entry.country,
-    Phone: entry.phone,
-    SKU: l.sku,
-    "Product Title": l.title,
-    Quantity: l.qty,
-    Notes: notes,
-    Processed: false
-  }));
+  // One row per SKU line per recipient. Each recipient gets its OWN Order
+  // ID — even in a bulk submission that shares the same product lines —
+  // so PO numbers and tracking stay traceable per shipment instead of
+  // getting jumbled across destinations.
+  const trackerRows = [];
+  allRecipients.forEach((r, i) => {
+    lines.forEach(l => {
+      trackerRows.push({
+        "Order ID": orderIds[i],
+        Timestamp: nowIso,
+        "Requestor Name": requestorName,
+        "Requestor Email": requestorEmail,
+        "Reason Code": reasonCode,
+        "Shipping Speed": SPEED_LABEL[speed] || speed,
+        "Recipient Name": r.recipientName,
+        "Street Address 1": r.addr1,
+        "Street Address 2": r.addr2,
+        City: r.city,
+        State: r.state,
+        Zip: r.zip,
+        Country: r.country,
+        Phone: r.phone,
+        SKU: l.sku,
+        "Product Title": l.title,
+        Quantity: l.qty,
+        Notes: notes,
+        Processed: false
+      });
+    });
+  });
   const ok = await flowAppendRows(trackerRows);
 
   if (ok) {
-    await saveRecentRecipient({ name: recipientName, addr1, addr2, city, state: entry.state, zip, country: entry.country, phone: entry.phone });
+    for (const r of allRecipients) {
+      await saveRecentRecipient({ name: r.recipientName, addr1: r.addr1, addr2: r.addr2, city: r.city, state: r.state, zip: r.zip, country: r.country, phone: r.phone });
+    }
     populateRecipientDatalist(await loadRecentRecipients());
 
     // Keep the requestor's own name, email, and reason code filled in — only
@@ -1543,16 +1742,20 @@ async function onSubmit(e) {
     document.getElementById('linesContainer').innerHTML = '';
     lineCounter = 0;
     addLine();
+    document.getElementById('extraRecipientsContainer').innerHTML = '';
+    document.getElementById('extraRecipientsCard').style.display = 'none';
+    recipientCounter = 0;
 
-    sessionSubmitCount++;
+    sessionSubmitCount += allRecipients.length;
     const counterEl = document.getElementById('sessionCounter');
     counterEl.textContent = `${sessionSubmitCount} request${sessionSubmitCount === 1 ? '' : 's'} submitted this session`;
     counterEl.style.display = 'block';
 
+    const bulkNote = allRecipients.length > 1 ? ` — ${allRecipients.length} separate orders created, one per recipient` : '';
     const toast = document.getElementById('toast');
     toast.textContent = usedLocalFallback
       ? "Saved to this browser only — the shared connection to SharePoint is still down, so your team can't see this yet. Your name and reason code are still filled in."
-      : "Request submitted. Your name and reason code are still filled in — go ahead and enter the next person's request.";
+      : `Request submitted${bulkNote}. Your name and reason code are still filled in — go ahead and enter the next person's request.`;
     toast.classList.add('show');
     setTimeout(() => toast.classList.remove('show'), 5000);
 
@@ -1562,7 +1765,7 @@ async function onSubmit(e) {
     const banner = document.getElementById('successBanner');
     document.getElementById('successBannerText').textContent = usedLocalFallback
       ? "Saved locally — shared connection is down"
-      : "Request submitted";
+      : (allRecipients.length > 1 ? `${allRecipients.length} orders submitted` : "Request submitted");
     banner.classList.add('show');
     setTimeout(() => banner.classList.remove('show'), 3200);
 
