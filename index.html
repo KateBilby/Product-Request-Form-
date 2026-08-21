@@ -151,6 +151,25 @@
   .toast { display: none; margin-top: 12px; padding: 10px 14px; border-radius: 7px; background: #EEF3EC; border: 1px solid #C9DAC0; color: var(--ok); font-size: 13.5px; font-weight: 600; }
   .toast.show { display: block; }
 
+  /* Fixed-position success confirmation — deliberately NOT tied to scroll
+     position, since submitting a request immediately scrolls the page back
+     up to the recipient-name field for the next entry. A toast living at the
+     bottom of the form would get scrolled out of view at the exact moment
+     it appears, which is why "did that go through?" was a real risk. */
+  .success-banner {
+    position: fixed; top: 20px; left: 50%; transform: translateX(-50%) translateY(-16px);
+    z-index: 9999; display: flex; align-items: center; gap: 10px;
+    background: #2F5A22; color: #fff; padding: 13px 22px; border-radius: 999px;
+    font-size: 14.5px; font-weight: 700; box-shadow: 0 10px 30px rgba(0,0,0,0.22);
+    opacity: 0; pointer-events: none; transition: opacity 0.22s ease, transform 0.22s ease;
+  }
+  .success-banner.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .success-banner .checkmark {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 22px; height: 22px; border-radius: 50%; background: #fff; color: #2F5A22;
+    font-size: 13px; font-weight: 900; flex-shrink: 0;
+  }
+
   /* ---- Queue ---- */
   .queue-controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; gap: 10px; flex-wrap: wrap; }
   .queue-controls .left { display: flex; gap: 14px; align-items: center; font-size: 13px; color: var(--muted); flex-wrap: wrap; }
@@ -381,6 +400,8 @@
       <div class="toast" id="toast">Request submitted. Thank you — it's in today's queue.</div>
     </form>
   </div>
+
+  <div class="success-banner" id="successBanner"><span class="checkmark">✓</span><span id="successBannerText">Request submitted</span></div>
 
   <!-- QUEUE VIEW -->
   <div class="view" id="view-queue">
@@ -1534,6 +1555,17 @@ async function onSubmit(e) {
       : "Request submitted. Your name and reason code are still filled in — go ahead and enter the next person's request.";
     toast.classList.add('show');
     setTimeout(() => toast.classList.remove('show'), 5000);
+
+    // A big fixed banner, independent of scroll position — the page jumps
+    // back up to the recipient field right after this, so the confirmation
+    // has to be visible no matter where that scroll lands.
+    const banner = document.getElementById('successBanner');
+    document.getElementById('successBannerText').textContent = usedLocalFallback
+      ? "Saved locally — shared connection is down"
+      : "Request submitted";
+    banner.classList.add('show');
+    setTimeout(() => banner.classList.remove('show'), 3200);
+
     renderQueue();
 
     // jump straight to the next thing they need to type
