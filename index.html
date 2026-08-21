@@ -292,9 +292,10 @@
 
         <div class="field" id="f-recipient">
           <label>Recipient Name</label>
-          <input type="text" id="recipientName" list="recent-recipients" placeholder="Who is this shipping to?" autocomplete="off">
+          <input type="text" id="recipientName" list="recent-recipients" placeholder="First and last name — e.g. Dana Runyon" autocomplete="off">
           <datalist id="recent-recipients"></datalist>
-          <div class="err">Required — remove any special characters flagged below</div>
+          <div class="hint">First and last name required — the warehouse can't process a single name or a nickname alone.</div>
+          <div class="err">Enter first and last name (exactly two words) — remove any special characters flagged below</div>
           <div class="recip-suggestion" id="recipSuggestion">
             We have a saved address for this name: <span id="recipSuggestionText"></span>.
             <div><button type="button" id="useRecipAddress">Use this address</button><button type="button" class="dismiss" id="dismissRecip">Dismiss</button></div>
@@ -893,6 +894,12 @@ function findBadChars(str) {
   if (!str) return [];
   return [...new Set(str.split('').filter(ch => !ALLOWED_CHARS.test(ch)))];
 }
+
+// The warehouse needs a clean first+last name to process a shipment —
+// exactly two words, no single names and no middle names/initials.
+function isFirstAndLastName(str) {
+  return str.trim().split(/\s+/).filter(Boolean).length === 2;
+}
 function validateChars(fieldId) {
   const el = document.getElementById(fieldId);
   const fieldWrap = el.closest('.field');
@@ -1246,8 +1253,8 @@ function addRecipient() {
     </div>
     <div class="field">
       <label>Recipient Name</label>
-      <input type="text" class="recip-name" placeholder="Who is this shipping to?">
-      <div class="err">Required — remove any special characters flagged below</div>
+      <input type="text" class="recip-name" placeholder="First and last name — e.g. Dana Runyon">
+      <div class="err">Enter first and last name (exactly two words) — remove any special characters flagged below</div>
     </div>
     <div class="field">
       <label>Street Address 1</label>
@@ -1529,9 +1536,9 @@ async function onSubmit(e) {
   if (speedInvalid) { valid = false; problems.push({ el: document.getElementById('f-speed'), label: 'Shipping Speed' }); }
 
   const recipientName = document.getElementById('recipientName').value.trim();
-  const recipientNameInvalid = !recipientName || findBadChars(recipientName).length > 0;
+  const recipientNameInvalid = !recipientName || findBadChars(recipientName).length > 0 || !isFirstAndLastName(recipientName);
   setInvalid('f-recipient', recipientNameInvalid);
-  if (recipientNameInvalid) { valid = false; problems.push({ el: document.getElementById('f-recipient'), label: 'Recipient Name' }); }
+  if (recipientNameInvalid) { valid = false; problems.push({ el: document.getElementById('f-recipient'), label: 'Recipient Name (first and last name required)' }); }
 
   const addr1 = document.getElementById('addr1').value.trim();
   const addr1Invalid = !addr1 || findBadChars(addr1).length > 0;
@@ -1574,9 +1581,9 @@ async function onSubmit(e) {
 
     const rName = row.querySelector('.recip-name').value.trim();
     const rNameField = row.querySelector('.recip-name').closest('.field');
-    const rNameInvalid = !rName || findBadChars(rName).length > 0;
+    const rNameInvalid = !rName || findBadChars(rName).length > 0 || !isFirstAndLastName(rName);
     rNameField.classList.toggle('invalid', rNameInvalid);
-    if (rNameInvalid) { valid = false; problems.push({ el: rNameField, label: `${label}: Name` }); }
+    if (rNameInvalid) { valid = false; problems.push({ el: rNameField, label: `${label}: Name (first and last required)` }); }
 
     const rAddr1 = row.querySelector('.recip-addr1').value.trim();
     const rAddr1Field = row.querySelector('.recip-addr1').closest('.field');
