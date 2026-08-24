@@ -221,6 +221,7 @@
       <button class="tab active" data-tab="submit">Submit Request</button>
       <button class="tab" data-tab="queue">Today's Queue</button>
       <button class="tab" data-tab="tracking">Tracking</button>
+      <button class="tab" data-tab="bulkimport">Mass Upload</button>
       <button class="tab" data-tab="status">Check Status</button>
     </div>
     <div id="sessionCounter" style="font-size:11.5px; color: var(--muted); padding-bottom: 10px; display:none;"></div>
@@ -474,6 +475,42 @@
     <div class="footnote">Once tracking is saved here, requestors can look it up themselves on the "Check Status" tab — no email needed.</div>
   </div>
 
+  <!-- MASS UPLOAD VIEW -->
+  <div class="view" id="view-bulkimport">
+    <div class="card" style="max-width:640px;">
+      <h2>Mass Upload Orders</h2>
+      <div class="hint" style="margin-top:-6px;">Upload a CSV of your working order sheet — expects Reason Code, SKU, Qty, Recipient, Street Address, Unit/Apt/Floor/etc., Phone Number, City, State, Zip, Country, Country Code columns. If a row's Recipient/address is left blank (a second item going to the same person), it inherits the most recent filled-in recipient above it — same as how the sheet already gets filled out. Each row still becomes its own separate order with its own PO, even when several rows share a recipient.</div>
+
+      <div class="row2">
+        <div class="field" id="f-bulk-requestor">
+          <label>Uploaded By — Name</label>
+          <input type="text" id="bulkRequestorName" placeholder="Who is submitting this batch?">
+        </div>
+        <div class="field" id="f-bulk-requestor-email">
+          <label>Uploaded By — Email</label>
+          <input type="email" id="bulkRequestorEmail" placeholder="e.g. jordan.lee@lemmelive.com">
+        </div>
+      </div>
+      <div class="field" id="f-bulk-speed">
+        <label>Shipping Speed for this batch</label>
+        <select id="bulkSpeed">
+          <option value="standard">Standard</option>
+          <option value="2day">2-Day</option>
+          <option value="nextday">Next Day</option>
+        </select>
+        <div class="hint">The sheet doesn't carry a per-row shipping speed, so one speed applies to every order in this upload.</div>
+      </div>
+
+      <div class="field" id="f-bulk-csv">
+        <label>Order Sheet CSV</label>
+        <input type="file" id="bulkCsvInput" accept=".csv">
+      </div>
+      <button type="button" class="btn-secondary" id="bulkParseBtn">Parse &amp; Preview</button>
+      <div id="bulkPreviewResults" style="margin-top:14px; font-size:12.5px; line-height:1.5;"></div>
+      <button type="button" class="submit-btn" id="bulkConfirmBtn" style="display:none; margin-top:12px;">Add These Orders to Today's Queue</button>
+    </div>
+  </div>
+
   <!-- STATUS CHECK VIEW -->
   <div class="view" id="view-status">
     <div class="card" style="max-width:480px;">
@@ -485,6 +522,17 @@
       </div>
       <button type="button" class="submit-btn" id="checkStatusBtn">Check Status</button>
       <div id="statusResults" style="margin-top:14px; font-size:13px; line-height:1.6;"></div>
+
+      <div style="margin:20px 0 0; border-top:1px solid var(--line); padding-top:16px;">
+        <h2 style="margin-top:0;">Or look up everything you've requested</h2>
+        <div class="field" id="f-status-email">
+          <label>Your Email</label>
+          <input type="email" id="statusRequestorEmail" placeholder="the email you used when submitting">
+          <div class="hint">Shows every order under that email — recipient, items, PO number, and tracking — no need to know or remember individual PO/order numbers.</div>
+        </div>
+        <button type="button" class="submit-btn" id="checkStatusByRequestorBtn">Look Up My Orders</button>
+        <div id="statusByRequestorResults" style="margin-top:14px; font-size:12.5px; line-height:1.5;"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -631,6 +679,25 @@ const COUNTRY_STATE_DEFAULT = {
 // Countries with no postal code system — zip is auto-filled with "00000"
 // (still required, just standardized) instead of being left blank or guessed.
 const NO_POSTAL_CODE_COUNTRIES = ["AE"];
+// Mass-upload sheets often spell a country out ("United States of America")
+// in a plain "Country" column instead of using a code — fall back to this
+// when the sheet's own "Country Code" column is blank.
+const COUNTRY_NAME_TO_CODE = {
+  "united states": "US", "united states of america": "US", "usa": "US", "u.s.a.": "US", "u.s.": "US",
+  "canada": "CA",
+  "united kingdom": "GB", "uk": "GB", "u.k.": "GB", "great britain": "GB",
+  "australia": "AU",
+  "mexico": "MX",
+  "germany": "DE",
+  "france": "FR",
+  "spain": "ES",
+  "italy": "IT",
+  "united arab emirates": "AE", "uae": "AE"
+};
+function guessCountryCode(fullName) {
+  if (!fullName) return '';
+  return COUNTRY_NAME_TO_CODE[fullName.trim().toLowerCase()] || '';
+}
 const ALLOWED_CHARS = /^[A-Za-z0-9\s\-.,'#\/&()]*$/;
 // The shared order queue itself now lives directly in Airtable's Requests
 // table (grouped by Order ID) — no separate blob key needed for it anymore.
@@ -778,7 +845,10 @@ function init() {
 
   document.getElementById('addTrackingBtn').addEventListener('click', addTracking);
   document.getElementById('uploadTrackingCsvBtn').addEventListener('click', uploadTrackingCsv);
+  document.getElementById('bulkParseBtn').addEventListener('click', bulkParseAndPreview);
+  document.getElementById('bulkConfirmBtn').addEventListener('click', bulkConfirmImport);
   document.getElementById('checkStatusBtn').addEventListener('click', checkStatus);
+  document.getElementById('checkStatusByRequestorBtn').addEventListener('click', checkStatusByRequestor);
   document.getElementById('archiveBtn').addEventListener('click', archiveAndClear);
 
   document.querySelectorAll('.speed-btn').forEach(btn => {
@@ -1845,11 +1915,18 @@ async function renderQueue() {
     const speedBadge = r.speed === 'nextday' ? '<span class="badge-rush">NEXT DAY</span>' : (r.speed === '2day' ? '<span class="badge-2day">2-DAY</span>' : '');
     const staleBadge = isStale ? '<span class="badge-stale">NOT TODAY</span>' : '';
     const itemsList = r.lines.map(l => `<li><span class="sku-chip">${escapeHtml(l.sku)}</span> ${escapeHtml(l.title)} &times; ${l.qty}</li>`).join('');
+    // PO Number only exists once ops has exported to CSV (that's what
+    // assigns it) — show a plain "Not yet" instead of leaving it blank, so
+    // it's clear the order exists but hasn't been exported, not that
+    // something's broken. Requestors who need this before export can use
+    // "Check Status" → look up by email instead of hunting for a PO here.
+    const poCell = r.poNumber ? escapeHtml(r.poNumber) : '<span style="color:var(--muted);font-size:11.5px;">Not yet</span>';
     return `<tr class="${rowClass}">
       <td>${time}${speedBadge ? '<br>' + speedBadge : ''}${staleBadge ? '<br>' + staleBadge : ''}</td>
       <td>${escapeHtml(r.requestorName)}<br><span style="color:var(--muted);font-size:11.5px;">${escapeHtml(r.reasonCode) || '—'}</span></td>
       <td>${escapeHtml(r.recipientName)}<br><span style="color:var(--muted);font-size:11.5px;">${escapeHtml(r.city)}, ${escapeHtml(r.state)} ${escapeHtml(r.zip)}</span></td>
       <td><ul class="line-item-list">${itemsList}</ul></td>
+      <td>${poCell}</td>
       <td>${addrIssue ? '<span class="badge-flag">CHECK ADDR</span>' : ''}</td>
       <td>
         <button class="row-action" data-action="toggle" data-id="${r.id}">${r.processed ? 'Unmark' : 'Mark done'}</button>
@@ -1859,7 +1936,7 @@ async function renderQueue() {
   }).join('');
 
   container.innerHTML = `<table>
-    <thead><tr><th>Time</th><th>Requestor</th><th>Recipient / Ship-to</th><th>Items</th><th></th><th></th></tr></thead>
+    <thead><tr><th>Time</th><th>Requestor</th><th>Recipient / Ship-to</th><th>Items</th><th>PO #</th><th></th><th></th></tr></thead>
     <tbody>${rows}</tbody>
   </table>`;
 
@@ -2145,6 +2222,212 @@ async function uploadTrackingCsv() {
   }
 }
 
+// ================= Mass upload of new orders (bulk CSV import) =================
+// Matches the team's actual working order sheet: one row per SKU, where
+// Recipient/address/etc. is only filled in on the first row for a person
+// and left blank on later rows for the same person — a normal spreadsheet
+// habit. Blank cells inherit the most recent filled-in value in that same
+// column. Each row still becomes its OWN order/PO — even several rows in a
+// row sharing a recipient don't get merged — so nothing gets jumbled.
+let bulkParsedOrders = null;
+
+const BULK_HEADER_MAP = {
+  'reason code': 'reasonCode',
+  'sku': 'sku',
+  'qty': 'qty',
+  'recipient': 'recipientName',
+  'street address': 'addr1',
+  'unit/apt/floor/etc.': 'addr2',
+  'phone number': 'phone',
+  'city': 'city',
+  'state': 'state',
+  'zip': 'zip',
+  'country': 'countryFull',
+  'country code': 'countryCode',
+  'tracking number': 'trackingNumber'
+};
+// SKU/Qty/Tracking are row-specific and never inherited; everything else
+// about the recipient/address carries forward from the last filled row.
+const BULK_FILLDOWN_KEYS = ['reasonCode', 'recipientName', 'addr1', 'addr2', 'phone', 'city', 'state', 'zip', 'countryFull', 'countryCode'];
+
+function parseBulkOrderCsv(text) {
+  const rows = parseCSV(text);
+  if (rows.length < 2) return { orders: [], errors: ['That file looks empty.'] };
+
+  const headers = rows[0].map(h => h.trim().toLowerCase().replace(/\s+/g, ' '));
+  const colIndex = {};
+  headers.forEach((h, i) => { if (BULK_HEADER_MAP[h] && colIndex[BULK_HEADER_MAP[h]] === undefined) colIndex[BULK_HEADER_MAP[h]] = i; });
+
+  if (colIndex.sku === undefined || colIndex.recipientName === undefined) {
+    return { orders: [], errors: ['Could not find "SKU" and/or "Recipient" columns in this file.'] };
+  }
+
+  const errors = [];
+  const orders = [];
+  const lastFilled = {};
+
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    const get = (key) => (colIndex[key] !== undefined ? (r[colIndex[key]] || '').trim() : '');
+    const rowNum = i + 1; // 1-based, matches the row number in the sheet/CSV
+
+    const raw = {};
+    BULK_FILLDOWN_KEYS.forEach(key => {
+      const v = get(key);
+      if (v) lastFilled[key] = v;
+      raw[key] = v || lastFilled[key] || '';
+    });
+
+    const sku = get('sku').toUpperCase();
+    if (!sku) continue; // fully blank trailing row — skip silently
+
+    const qtyRaw = get('qty');
+    const trackingNumber = get('trackingNumber');
+
+    const catalogEntry = SKU_BY_CODE[sku];
+    if (!catalogEntry) { errors.push(`Row ${rowNum}: unknown SKU "${sku}" — skipped.`); continue; }
+
+    let qty = parseInt(qtyRaw, 10);
+    const qtyDefaulted = !(qty > 0);
+    if (qtyDefaulted) qty = 1;
+
+    const recipientName = raw.recipientName;
+    if (!recipientName) { errors.push(`Row ${rowNum}: no recipient name (and none to inherit from above) — skipped.`); continue; }
+    if (findBadChars(recipientName).length) { errors.push(`Row ${rowNum}: recipient name "${recipientName}" has characters that can't be processed — skipped.`); continue; }
+    if (!isFirstAndLastName(recipientName)) { errors.push(`Row ${rowNum}: recipient "${recipientName}" needs a first and last name — skipped.`); continue; }
+
+    const addr1 = raw.addr1;
+    if (!addr1) { errors.push(`Row ${rowNum}: no street address for ${recipientName} — skipped.`); continue; }
+    if (findBadChars(addr1).length) { errors.push(`Row ${rowNum}: address for ${recipientName} has characters that can't be processed — skipped.`); continue; }
+
+    const city = raw.city;
+    if (!city) { errors.push(`Row ${rowNum}: no city for ${recipientName} — skipped.`); continue; }
+
+    let countryCode = (raw.countryCode || '').toUpperCase();
+    if (!countryCode) countryCode = guessCountryCode(raw.countryFull);
+    if (!countryCode) { errors.push(`Row ${rowNum}: couldn't determine a country code for ${recipientName} — skipped.`); continue; }
+    const isUS = countryCode === 'US';
+
+    const state = (raw.state || '').toUpperCase();
+    if (isUS && !US_STATES.includes(state)) { errors.push(`Row ${rowNum}: "${state || '(blank)'}" isn't a valid US state for ${recipientName} — skipped.`); continue; }
+
+    // Real-world spreadsheets frequently strip a US zip's leading zero by
+    // treating the cell as a number (e.g. NJ's "07306" becomes "7306") —
+    // restore it rather than reject an otherwise-good row.
+    let zip = raw.zip;
+    if (isUS && /^\d+$/.test(zip) && zip.length < 5) zip = zip.padStart(5, '0');
+    if (!zip && NO_POSTAL_CODE_COUNTRIES.includes(countryCode)) zip = '00000';
+    const zipAlnum = zip.replace(/[\s-]/g, '');
+    if (!zip || zipAlnum.length < 5) { errors.push(`Row ${rowNum}: zip/postal code missing or too short for ${recipientName} — skipped.`); continue; }
+
+    orders.push({
+      rowNum,
+      reasonCode: raw.reasonCode || '',
+      recipientName, addr1, addr2: raw.addr2 || '',
+      city, state: isUS ? state : (state || ''), zip,
+      country: countryCode, phone: raw.phone || '',
+      sku, title: catalogEntry.title, qty, qtyDefaulted,
+      trackingNumber
+    });
+  }
+
+  return { orders, errors };
+}
+
+async function bulkParseAndPreview() {
+  const fileInput = document.getElementById('bulkCsvInput');
+  const resultsEl = document.getElementById('bulkPreviewResults');
+  const confirmBtn = document.getElementById('bulkConfirmBtn');
+  confirmBtn.style.display = 'none';
+  bulkParsedOrders = null;
+
+  const file = fileInput.files[0];
+  if (!file) { resultsEl.textContent = 'Choose a CSV file first.'; resultsEl.style.color = 'var(--rush)'; return; }
+
+  const text = await file.text();
+  const { orders, errors } = parseBulkOrderCsv(text);
+
+  let html = '';
+  if (orders.length > 0) {
+    html += `<strong style="color:var(--ok);">${orders.length} order${orders.length === 1 ? '' : 's'} ready to add.</strong>`;
+    const defaulted = orders.filter(o => o.qtyDefaulted).length;
+    if (defaulted) html += ` (${defaulted} had no quantity listed — defaulted to 1.)`;
+    const previewRows = orders.map(o => `<tr>
+      <td>${o.rowNum}</td><td>${escapeHtml(o.recipientName)}</td><td>${escapeHtml(o.sku)}</td>
+      <td>${o.qty}</td><td>${escapeHtml(o.city)}, ${escapeHtml(o.state)}</td>
+    </tr>`).join('');
+    html += `<table style="margin-top:10px;"><thead><tr><th>Row</th><th>Recipient</th><th>SKU</th><th>Qty</th><th>Ship To</th></tr></thead><tbody>${previewRows}</tbody></table>`;
+  }
+  if (errors.length > 0) {
+    html += `<div style="margin-top:10px; color:var(--rush);"><strong>${errors.length} row${errors.length === 1 ? '' : 's'} skipped:</strong><ul style="margin:4px 0 0 18px;">${errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul></div>`;
+  }
+  resultsEl.innerHTML = html || 'No rows found in that file.';
+
+  if (orders.length > 0) {
+    bulkParsedOrders = orders;
+    confirmBtn.style.display = 'inline-block';
+  }
+}
+
+async function bulkConfirmImport() {
+  if (!bulkParsedOrders || !bulkParsedOrders.length) return;
+  const requestorName = document.getElementById('bulkRequestorName').value.trim();
+  const requestorEmail = document.getElementById('bulkRequestorEmail').value.trim();
+  const speed = document.getElementById('bulkSpeed').value;
+  if (!requestorName || !requestorEmail) {
+    alert('Enter who is uploading this batch (name and email) before confirming.');
+    return;
+  }
+
+  const confirmBtn = document.getElementById('bulkConfirmBtn');
+  confirmBtn.disabled = true;
+  confirmBtn.textContent = 'Adding…';
+
+  const nowIso = new Date().toISOString();
+  // Each row gets its own Order ID — same "one shipment, one PO" rule as
+  // every other order in the system, even though this whole batch shares
+  // one requestor/speed.
+  const trackerRows = bulkParsedOrders.map(o => ({
+    "Order ID": 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
+    Timestamp: nowIso,
+    "Requestor Name": requestorName,
+    "Requestor Email": requestorEmail,
+    "Reason Code": o.reasonCode,
+    "Shipping Speed": SPEED_LABEL[speed] || speed,
+    "Recipient Name": o.recipientName,
+    "Street Address 1": o.addr1,
+    "Street Address 2": o.addr2,
+    City: o.city,
+    State: o.state,
+    Zip: o.zip,
+    Country: o.country,
+    Phone: o.phone,
+    SKU: o.sku,
+    "Product Title": o.title,
+    Quantity: o.qty,
+    Notes: '',
+    Processed: false,
+    "Tracking Number": o.trackingNumber || ''
+  }));
+
+  usedLocalFallback = false;
+  const ok = await flowAppendRows(trackerRows);
+  confirmBtn.disabled = false;
+  confirmBtn.textContent = "Add These Orders to Today's Queue";
+  const resultsEl = document.getElementById('bulkPreviewResults');
+  if (ok) {
+    resultsEl.innerHTML = usedLocalFallback
+      ? `<strong style="color:var(--amber);">Saved to this browser only — the shared connection is down, so these ${trackerRows.length} orders aren't visible to the team yet. Try uploading again once it's back.</strong>`
+      : `<strong style="color:var(--ok);">✓ ${trackerRows.length} order${trackerRows.length === 1 ? '' : 's'} added to today's queue.</strong>`;
+    confirmBtn.style.display = 'none';
+    bulkParsedOrders = null;
+    document.getElementById('bulkCsvInput').value = '';
+    renderQueue();
+  } else {
+    alert('Could not save these orders — check your connection and try again.');
+  }
+}
+
 // ================= Self-serve status check =================
 async function checkStatus() {
   const poNumber = document.getElementById('statusPoNumber').value.trim();
@@ -2170,6 +2453,57 @@ async function checkStatus() {
     resultsEl.textContent = e.message.includes('404')
       ? `No order found with PO/Order Number "${poNumber}" — double-check it against your confirmation.`
       : 'Could not reach the relay — check your connection and try again.';
+    resultsEl.style.color = 'var(--rush)';
+  }
+}
+
+// Solves "I don't know my PO/order number" at the root — a PO Number
+// doesn't even exist until ops exports to CSV, so requiring one to look
+// yourself up doesn't work for anything still sitting in the queue. This
+// looks up every order under an email instead, showing recipient + items
+// + PO (once assigned) + tracking side by side, same data checkStatus()
+// already has, just filtered by requestor instead of by PO.
+async function checkStatusByRequestor() {
+  const email = document.getElementById('statusRequestorEmail').value.trim().toLowerCase();
+  const resultsEl = document.getElementById('statusByRequestorResults');
+  if (!email) { resultsEl.textContent = 'Enter your email first.'; resultsEl.style.color = 'var(--rush)'; return; }
+
+  resultsEl.textContent = 'Looking up your orders…';
+  resultsEl.style.color = 'var(--muted)';
+  try {
+    const all = await loadRequests();
+    const mine = all
+      .filter(r => r.requestorEmail.trim().toLowerCase() === email)
+      .sort((a, b) => new Date(b.ts) - new Date(a.ts));
+
+    if (mine.length === 0) {
+      resultsEl.textContent = `No orders found for ${email} — double-check it's the exact email used when submitting.`;
+      resultsEl.style.color = 'var(--rush)';
+      return;
+    }
+
+    const rowsHtml = mine.map(r => {
+      const items = r.lines.map(l => `${escapeHtml(l.sku)} × ${l.qty}`).join(', ');
+      const poCell = r.poNumber ? escapeHtml(r.poNumber) : '<span style="color:var(--muted);">Not yet assigned</span>';
+      const trackingCell = r.trackingNumber ? `<strong style="color:var(--ok);">${escapeHtml(r.trackingNumber)}</strong>` : '<span style="color:var(--muted);">Not yet</span>';
+      const statusCell = r.processed ? 'Processed' : 'In queue';
+      return `<tr>
+        <td>${poCell}</td>
+        <td>${escapeHtml(r.recipientName)}<br><span style="color:var(--muted);font-size:11.5px;">${escapeHtml(r.city)}, ${escapeHtml(r.state)}</span></td>
+        <td>${escapeHtml(items)}</td>
+        <td>${statusCell}</td>
+        <td>${trackingCell}</td>
+      </tr>`;
+    }).join('');
+
+    resultsEl.innerHTML = `<table>
+      <thead><tr><th>PO #</th><th>Recipient</th><th>Items</th><th>Status</th><th>Tracking</th></tr></thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>`;
+    resultsEl.style.color = '';
+  } catch (e) {
+    console.error('checkStatusByRequestor failed', e);
+    resultsEl.textContent = 'Could not reach the relay — check your connection and try again.';
     resultsEl.style.color = 'var(--rush)';
   }
 }
