@@ -479,7 +479,8 @@
   <div class="view" id="view-bulkimport">
     <div class="card" style="max-width:640px;">
       <h2>Mass Upload Orders</h2>
-      <div class="hint" style="margin-top:-6px;">Upload a CSV of your working order sheet — expects Reason Code, SKU, Qty, Recipient, Street Address, Unit/Apt/Floor/etc., Phone Number, City, State, Zip, Country, Country Code columns. If a row's Recipient/address is left blank (a second item going to the same person), it inherits the most recent filled-in recipient above it — same as how the sheet already gets filled out. Each row still becomes its own separate order with its own PO, even when several rows share a recipient.</div>
+      <div class="hint" style="margin-top:-6px;">One row = one order, address entered once. Sending more than one product to the same person? List it on that same row under "SKU 2"/"Qty 2", "SKU 3"/"Qty 3", and so on — not a separate row — so it stays one order/PO instead of looking like two. Need more than 5 products on one row? Just add "SKU 6"/"Qty 6" columns yourself, it'll be picked up automatically.</div>
+      <button type="button" class="btn-secondary" id="bulkTemplateBtn" style="margin-bottom:14px;">⬇ Download Template CSV</button>
 
       <div class="row2">
         <div class="field" id="f-bulk-requestor">
@@ -847,6 +848,7 @@ function init() {
   document.getElementById('uploadTrackingCsvBtn').addEventListener('click', uploadTrackingCsv);
   document.getElementById('bulkParseBtn').addEventListener('click', bulkParseAndPreview);
   document.getElementById('bulkConfirmBtn').addEventListener('click', bulkConfirmImport);
+  document.getElementById('bulkTemplateBtn').addEventListener('click', downloadBulkTemplate);
   document.getElementById('checkStatusBtn').addEventListener('click', checkStatus);
   document.getElementById('checkStatusByRequestorBtn').addEventListener('click', checkStatusByRequestor);
   document.getElementById('archiveBtn').addEventListener('click', archiveAndClear);
@@ -2233,8 +2235,6 @@ let bulkParsedOrders = null;
 
 const BULK_HEADER_MAP = {
   'reason code': 'reasonCode',
-  'sku': 'sku',
-  'qty': 'qty',
   'recipient': 'recipientName',
   'street address': 'addr1',
   'unit/apt/floor/etc.': 'addr2',
@@ -2246,9 +2246,29 @@ const BULK_HEADER_MAP = {
   'country code': 'countryCode',
   'tracking number': 'trackingNumber'
 };
-// SKU/Qty/Tracking are row-specific and never inherited; everything else
-// about the recipient/address carries forward from the last filled row.
+// Everything about the recipient/address carries forward from the last
+// filled row — SKU/Qty/Tracking are row-specific and never inherited.
 const BULK_FILLDOWN_KEYS = ['reasonCode', 'recipientName', 'addr1', 'addr2', 'phone', 'city', 'state', 'zip', 'countryFull', 'countryCode'];
+
+// A row can carry more than one product: "SKU"/"Qty" (bare, no number) is
+// treated as slot 1; "SKU 2"/"Qty 2", "SKU 3"/"Qty 3", etc. are read the
+// same way for however many numbered pairs the sheet actually has — there's
+// no hard cap at 5, that's just what the starter template ships with. Add
+// "SKU 6"/"Qty 6" and it's picked up automatically.
+function detectLinePairs(headers) {
+  const skuCols = {}, qtyCols = {};
+  headers.forEach((h, i) => {
+    let m = h.match(/^sku\s*(\d+)$/);
+    if (m) { skuCols[m[1]] = i; return; }
+    if (h === 'sku') { skuCols['1'] = i; return; }
+    m = h.match(/^qty\s*(\d+)$/);
+    if (m) { qtyCols[m[1]] = i; return; }
+    if (h === 'qty') { qtyCols['1'] = i; return; }
+  });
+  return Object.keys(skuCols)
+    .map(n => ({ n, skuCol: skuCols[n], qtyCol: qtyCols[n] !== undefined ? qtyCols[n] : null }))
+    .sort((a, b) => Number(a.n) - Number(b.n));
+}
 
 function parseBulkOrderCsv(text) {
   const rows = parseCSV(text);
@@ -2257,46 +2277,71 @@ function parseBulkOrderCsv(text) {
   const headers = rows[0].map(h => h.trim().toLowerCase().replace(/\s+/g, ' '));
   const colIndex = {};
   headers.forEach((h, i) => { if (BULK_HEADER_MAP[h] && colIndex[BULK_HEADER_MAP[h]] === undefined) colIndex[BULK_HEADER_MAP[h]] = i; });
+  const linePairs = detectLinePairs(headers);
 
-  if (colIndex.sku === undefined || colIndex.recipientName === undefined) {
-    return { orders: [], errors: ['Could not find "SKU" and/or "Recipient" columns in this file.'] };
+  if (colIndex.recipientName === undefined || linePairs.length === 0) {
+    return { orders: [], errors: ['Could not find a "Recipient" column and at least one "SKU"/"SKU 1" column in this file.'] };
   }
 
   const errors = [];
   const orders = [];
-  const lastFilled = {};
+  // Forward-fill is all-or-nothing per row, not per column: a row with its
+  // OWN recipient name uses exactly what it says (blank phone means blank,
+  // full stop) — it never borrows a leftover value from the previous
+  // person. Only a row with NO recipient name of its own (a continuation
+  // row, the old sheet's convention) inherits the whole address block.
+  let lastFilledBlock = null;
 
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     const get = (key) => (colIndex[key] !== undefined ? (r[colIndex[key]] || '').trim() : '');
     const rowNum = i + 1; // 1-based, matches the row number in the sheet/CSV
 
-    const raw = {};
-    BULK_FILLDOWN_KEYS.forEach(key => {
-      const v = get(key);
-      if (v) lastFilled[key] = v;
-      raw[key] = v || lastFilled[key] || '';
+    let raw;
+    if (get('recipientName')) {
+      raw = {};
+      BULK_FILLDOWN_KEYS.forEach(key => { raw[key] = get(key); });
+      lastFilledBlock = raw;
+    } else if (lastFilledBlock) {
+      raw = lastFilledBlock;
+    } else {
+      raw = {};
+      BULK_FILLDOWN_KEYS.forEach(key => { raw[key] = get(key); });
+    }
+
+    // Every filled SKU/Qty slot on this row becomes one line item, all
+    // going to the same recipient — this is the actual fix for "multiple
+    // products looks like two different orders": one address, several
+    // lines, one Order ID/PO once this becomes a real order below.
+    const lineErrors = [];
+    const lines = [];
+    linePairs.forEach(({ n, skuCol, qtyCol }) => {
+      const sku = (r[skuCol] || '').trim().toUpperCase();
+      if (!sku) return; // this slot just wasn't used on this row
+      const catalogEntry = SKU_BY_CODE[sku];
+      if (!catalogEntry) { lineErrors.push(`unknown SKU "${sku}" (slot ${n})`); return; }
+      const qtyRaw = qtyCol !== null ? (r[qtyCol] || '').trim() : '';
+      let qty = parseInt(qtyRaw, 10);
+      const qtyDefaulted = !(qty > 0);
+      if (qtyDefaulted) qty = 1;
+      lines.push({ sku, title: catalogEntry.title, qty, qtyDefaulted });
     });
 
-    const sku = get('sku').toUpperCase();
-    if (!sku) continue; // fully blank trailing row — skip silently
-
-    const qtyRaw = get('qty');
-    const trackingNumber = get('trackingNumber');
-
-    const catalogEntry = SKU_BY_CODE[sku];
-    if (!catalogEntry) { errors.push(`Row ${rowNum}: unknown SKU "${sku}" — skipped.`); continue; }
-
-    let qty = parseInt(qtyRaw, 10);
-    const qtyDefaulted = !(qty > 0);
-    if (qtyDefaulted) qty = 1;
-
     const recipientName = raw.recipientName;
+    const addr1 = raw.addr1;
+    if (!recipientName && !addr1 && lines.length === 0) continue; // fully blank trailing row — skip silently
+
+    if (lines.length === 0) {
+      errors.push(lineErrors.length
+        ? `Row ${rowNum}: ${lineErrors.join('; ')} — skipped.`
+        : `Row ${rowNum}: no products listed for ${recipientName || 'this row'} — skipped.`);
+      continue;
+    }
+
     if (!recipientName) { errors.push(`Row ${rowNum}: no recipient name (and none to inherit from above) — skipped.`); continue; }
     if (findBadChars(recipientName).length) { errors.push(`Row ${rowNum}: recipient name "${recipientName}" has characters that can't be processed — skipped.`); continue; }
     if (!isFirstAndLastName(recipientName)) { errors.push(`Row ${rowNum}: recipient "${recipientName}" needs a first and last name — skipped.`); continue; }
 
-    const addr1 = raw.addr1;
     if (!addr1) { errors.push(`Row ${rowNum}: no street address for ${recipientName} — skipped.`); continue; }
     if (findBadChars(addr1).length) { errors.push(`Row ${rowNum}: address for ${recipientName} has characters that can't be processed — skipped.`); continue; }
 
@@ -2320,14 +2365,18 @@ function parseBulkOrderCsv(text) {
     const zipAlnum = zip.replace(/[\s-]/g, '');
     if (!zip || zipAlnum.length < 5) { errors.push(`Row ${rowNum}: zip/postal code missing or too short for ${recipientName} — skipped.`); continue; }
 
+    // A bad SKU in one slot doesn't sink the whole row — the other, valid
+    // products for this recipient still go through.
+    if (lineErrors.length) errors.push(`Row ${rowNum}: ${lineErrors.join('; ')} (rest of the row still added).`);
+
     orders.push({
       rowNum,
       reasonCode: raw.reasonCode || '',
       recipientName, addr1, addr2: raw.addr2 || '',
       city, state: isUS ? state : (state || ''), zip,
       country: countryCode, phone: raw.phone || '',
-      sku, title: catalogEntry.title, qty, qtyDefaulted,
-      trackingNumber
+      lines,
+      trackingNumber: get('trackingNumber')
     });
   }
 
@@ -2350,16 +2399,18 @@ async function bulkParseAndPreview() {
   let html = '';
   if (orders.length > 0) {
     html += `<strong style="color:var(--ok);">${orders.length} order${orders.length === 1 ? '' : 's'} ready to add.</strong>`;
-    const defaulted = orders.filter(o => o.qtyDefaulted).length;
-    if (defaulted) html += ` (${defaulted} had no quantity listed — defaulted to 1.)`;
-    const previewRows = orders.map(o => `<tr>
-      <td>${o.rowNum}</td><td>${escapeHtml(o.recipientName)}</td><td>${escapeHtml(o.sku)}</td>
-      <td>${o.qty}</td><td>${escapeHtml(o.city)}, ${escapeHtml(o.state)}</td>
-    </tr>`).join('');
-    html += `<table style="margin-top:10px;"><thead><tr><th>Row</th><th>Recipient</th><th>SKU</th><th>Qty</th><th>Ship To</th></tr></thead><tbody>${previewRows}</tbody></table>`;
+    const defaultedLines = orders.reduce((sum, o) => sum + o.lines.filter(l => l.qtyDefaulted).length, 0);
+    if (defaultedLines) html += ` (${defaultedLines} item${defaultedLines === 1 ? '' : 's'} had no quantity listed — defaulted to 1.)`;
+    const previewRows = orders.map(o => {
+      const itemsStr = o.lines.map(l => `${escapeHtml(l.sku)} × ${l.qty}`).join(', ');
+      return `<tr>
+        <td>${o.rowNum}</td><td>${escapeHtml(o.recipientName)}</td><td>${itemsStr}</td><td>${escapeHtml(o.city)}, ${escapeHtml(o.state)}</td>
+      </tr>`;
+    }).join('');
+    html += `<table style="margin-top:10px;"><thead><tr><th>Row</th><th>Recipient</th><th>Items</th><th>Ship To</th></tr></thead><tbody>${previewRows}</tbody></table>`;
   }
   if (errors.length > 0) {
-    html += `<div style="margin-top:10px; color:var(--rush);"><strong>${errors.length} row${errors.length === 1 ? '' : 's'} skipped:</strong><ul style="margin:4px 0 0 18px;">${errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul></div>`;
+    html += `<div style="margin-top:10px; color:var(--rush);"><strong>${errors.length} row${errors.length === 1 ? '' : 's'} skipped or partial:</strong><ul style="margin:4px 0 0 18px;">${errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul></div>`;
   }
   resultsEl.innerHTML = html || 'No rows found in that file.';
 
@@ -2384,31 +2435,38 @@ async function bulkConfirmImport() {
   confirmBtn.textContent = 'Adding…';
 
   const nowIso = new Date().toISOString();
-  // Each row gets its own Order ID — same "one shipment, one PO" rule as
-  // every other order in the system, even though this whole batch shares
-  // one requestor/speed.
-  const trackerRows = bulkParsedOrders.map(o => ({
-    "Order ID": 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
-    Timestamp: nowIso,
-    "Requestor Name": requestorName,
-    "Requestor Email": requestorEmail,
-    "Reason Code": o.reasonCode,
-    "Shipping Speed": SPEED_LABEL[speed] || speed,
-    "Recipient Name": o.recipientName,
-    "Street Address 1": o.addr1,
-    "Street Address 2": o.addr2,
-    City: o.city,
-    State: o.state,
-    Zip: o.zip,
-    Country: o.country,
-    Phone: o.phone,
-    SKU: o.sku,
-    "Product Title": o.title,
-    Quantity: o.qty,
-    Notes: '',
-    Processed: false,
-    "Tracking Number": o.trackingNumber || ''
-  }));
+  // One Order ID per ROW (not per SKU) — every product listed for that
+  // recipient shares it, exactly like the interactive form's multi-line
+  // submit. That's the actual fix: multiple products for one person no
+  // longer read as separate orders.
+  const trackerRows = [];
+  bulkParsedOrders.forEach(o => {
+    const orderId = 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    o.lines.forEach(l => {
+      trackerRows.push({
+        "Order ID": orderId,
+        Timestamp: nowIso,
+        "Requestor Name": requestorName,
+        "Requestor Email": requestorEmail,
+        "Reason Code": o.reasonCode,
+        "Shipping Speed": SPEED_LABEL[speed] || speed,
+        "Recipient Name": o.recipientName,
+        "Street Address 1": o.addr1,
+        "Street Address 2": o.addr2,
+        City: o.city,
+        State: o.state,
+        Zip: o.zip,
+        Country: o.country,
+        Phone: o.phone,
+        SKU: l.sku,
+        "Product Title": l.title,
+        Quantity: l.qty,
+        Notes: '',
+        Processed: false,
+        "Tracking Number": o.trackingNumber || ''
+      });
+    });
+  });
 
   usedLocalFallback = false;
   const ok = await flowAppendRows(trackerRows);
@@ -2417,8 +2475,8 @@ async function bulkConfirmImport() {
   const resultsEl = document.getElementById('bulkPreviewResults');
   if (ok) {
     resultsEl.innerHTML = usedLocalFallback
-      ? `<strong style="color:var(--amber);">Saved to this browser only — the shared connection is down, so these ${trackerRows.length} orders aren't visible to the team yet. Try uploading again once it's back.</strong>`
-      : `<strong style="color:var(--ok);">✓ ${trackerRows.length} order${trackerRows.length === 1 ? '' : 's'} added to today's queue.</strong>`;
+      ? `<strong style="color:var(--amber);">Saved to this browser only — the shared connection is down, so these ${bulkParsedOrders.length} orders aren't visible to the team yet. Try uploading again once it's back.</strong>`
+      : `<strong style="color:var(--ok);">✓ ${bulkParsedOrders.length} order${bulkParsedOrders.length === 1 ? '' : 's'} added to today's queue.</strong>`;
     confirmBtn.style.display = 'none';
     bulkParsedOrders = null;
     document.getElementById('bulkCsvInput').value = '';
@@ -2426,6 +2484,21 @@ async function bulkConfirmImport() {
   } else {
     alert('Could not save these orders — check your connection and try again.');
   }
+}
+
+function downloadBulkTemplate() {
+  const headers = ["Recipient","Street Address","Unit/Apt/Floor/etc.","Phone Number","City","State","Zip","Country Code","Reason Code","SKU 1","Qty 1","SKU 2","Qty 2","SKU 3","Qty 3","SKU 4","Qty 4","SKU 5","Qty 5"];
+  const example = ["Dana Runyon","63 Prospect Street","","555-123-4567","Demarest","NJ","07627","US","Employee Order","LGDE160","2","LGSL160","1","","","","","",""];
+  const csv = [headers, example].map(row => row.map(csvCell).join(',')).join('\r\n');
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'mass-upload-template.csv';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 // ================= Self-serve status check =================
