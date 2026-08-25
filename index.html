@@ -480,7 +480,8 @@
     <div class="card" style="max-width:640px;">
       <h2>Mass Upload Orders</h2>
       <div class="hint" style="margin-top:-6px;">One row = one order, address entered once. Sending more than one product to the same person? List it on that same row under "SKU 2"/"Qty 2", "SKU 3"/"Qty 3", and so on — not a separate row — so it stays one order/PO instead of looking like two. Need more than 5 products on one row? Just add "SKU 6"/"Qty 6" columns yourself, it'll be picked up automatically.</div>
-      <button type="button" class="btn-secondary" id="bulkTemplateBtn" style="margin-bottom:14px;">⬇ Download Template CSV</button>
+      <button type="button" class="btn-secondary" id="bulkTemplateBtn" style="margin-bottom:6px;">⬇ Download Template CSV</button>
+      <div class="hint" style="margin-bottom:14px;">The template includes the full valid-SKU list as reference columns on the right, so you can look up codes while filling in orders on the left. Those reference columns are ignored on upload — no need to delete them first.</div>
 
       <div class="row2">
         <div class="field" id="f-bulk-requestor">
@@ -2298,6 +2299,15 @@ function parseBulkOrderCsv(text) {
     const get = (key) => (colIndex[key] !== undefined ? (r[colIndex[key]] || '').trim() : '');
     const rowNum = i + 1; // 1-based, matches the row number in the sheet/CSV
 
+    // A row with nothing of its own — no recipient, no address, no SKU in
+    // any slot — isn't a continuation row to inherit into, it's just an
+    // unused row (e.g. the template's SKU reference columns run far past
+    // where the actual order rows stop). Skip it outright rather than
+    // having it inherit the last real recipient and get flagged as an
+    // error for having no products.
+    const hasAnySkuThisRow = linePairs.some(p => (r[p.skuCol] || '').trim());
+    if (!get('recipientName') && !get('addr1') && !hasAnySkuThisRow) continue;
+
     let raw;
     if (get('recipientName')) {
       raw = {};
@@ -2487,10 +2497,28 @@ async function bulkConfirmImport() {
   }
 }
 
+// The order-entry columns only ever need a row or two filled in, but a
+// plain CSV has no second sheet/dropdown-validation to hold "here's every
+// valid SKU" — so that reference list rides along as two extra columns on
+// the right, one catalog entry per row, for as many rows as the catalog
+// needs. (parseBulkOrderCsv() ignores unrecognized headers, and skips any
+// row with nothing in the actual order columns, so re-uploading this file
+// as-is — reference columns and all — is harmless, not ~100 error rows.)
 function downloadBulkTemplate() {
-  const headers = ["Recipient","Street Address","Unit/Apt/Floor/etc.","Phone Number","City","State","Zip","Country Code","Reason Code","SKU 1","Qty 1","SKU 2","Qty 2","SKU 3","Qty 3","SKU 4","Qty 4","SKU 5","Qty 5"];
-  const example = ["Dana Runyon","63 Prospect Street","","555-123-4567","Demarest","NJ","07627","US","Employee Order","LGDE160","2","LGSL160","1","","","","","",""];
-  const csv = [headers, example].map(row => row.map(csvCell).join(',')).join('\r\n');
+  const orderHeaders = ["Recipient","Street Address","Unit/Apt/Floor/etc.","Phone Number","City","State","Zip","Country Code","Reason Code","SKU 1","Qty 1","SKU 2","Qty 2","SKU 3","Qty 3","SKU 4","Qty 4","SKU 5","Qty 5"];
+  const exampleRow = ["Dana Runyon","63 Prospect Street","","555-123-4567","Demarest","NJ","07627","US","Employee Order","LGDE160","2","LGSL160","1","","","","","",""];
+  const refHeaders = ["Reference: SKU","Reference: Product Name"];
+  const blankOrderRow = orderHeaders.map(() => '');
+
+  const rows = [[...orderHeaders, ...refHeaders]];
+  const rowCount = Math.max(1, CATALOG.length);
+  for (let i = 0; i < rowCount; i++) {
+    const orderCols = i === 0 ? exampleRow : blankOrderRow;
+    const cat = CATALOG[i];
+    rows.push([...orderCols, cat ? cat.sku : '', cat ? cat.title : '']);
+  }
+
+  const csv = rows.map(row => row.map(csvCell).join(',')).join('\r\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
