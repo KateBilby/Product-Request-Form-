@@ -4,6 +4,10 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Product Request Desk</title>
+<!-- SheetJS: reads .xlsx/.xls files client-side for Mass Upload, so a
+     spreadsheet someone has color-formatted in Excel can be uploaded
+     directly instead of needing to be re-saved as plain CSV first. -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
 <style>
   :root {
     --bg: #F6F5F0;
@@ -504,8 +508,9 @@
       </div>
 
       <div class="field" id="f-bulk-csv">
-        <label>Order Sheet CSV</label>
-        <input type="file" id="bulkCsvInput" accept=".csv">
+        <label>Order Sheet (CSV or Excel)</label>
+        <input type="file" id="bulkCsvInput" accept=".csv,.xlsx,.xls">
+        <div class="hint">.xlsx/.xls upload fine as-is — any colors/formatting you've added in Excel are ignored, only the cell values matter.</div>
       </div>
       <button type="button" class="btn-secondary" id="bulkParseBtn">Parse &amp; Preview</button>
       <div id="bulkPreviewResults" style="margin-top:14px; font-size:12.5px; line-height:1.5;"></div>
@@ -2282,11 +2287,13 @@ function detectLinePairs(headers) {
     .sort((a, b) => Number(a.n) - Number(b.n));
 }
 
-function parseBulkOrderCsv(text) {
-  const rows = parseCSV(text);
+// Shared by both upload paths (plain CSV text, and a parsed Excel sheet's
+// rows) — once we have a plain array of row-arrays, the column detection
+// and order-building logic is identical either way.
+function buildOrdersFromRows(rows) {
   if (rows.length < 2) return { orders: [], errors: ['That file looks empty.'] };
 
-  const headers = rows[0].map(h => h.trim().toLowerCase().replace(/\s+/g, ' '));
+  const headers = rows[0].map(h => String(h ?? '').trim().toLowerCase().replace(/\s+/g, ' '));
   const colIndex = {};
   headers.forEach((h, i) => { if (BULK_HEADER_MAP[h] && colIndex[BULK_HEADER_MAP[h]] === undefined) colIndex[BULK_HEADER_MAP[h]] = i; });
   const linePairs = detectLinePairs(headers);
@@ -2306,7 +2313,10 @@ function parseBulkOrderCsv(text) {
 
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
-    const get = (key) => (colIndex[key] !== undefined ? (r[colIndex[key]] || '').trim() : '');
+    // String()-coerce every cell read — an uploaded Excel file can hand
+    // back a real JS number (e.g. Qty) instead of a string, which a bare
+    // .trim() would throw on.
+    const get = (key) => (colIndex[key] !== undefined ? String(r[colIndex[key]] ?? '').trim() : '');
     const rowNum = i + 1; // 1-based, matches the row number in the sheet/CSV
 
     // A row with nothing of its own — no recipient, no address, no SKU in
@@ -2315,7 +2325,7 @@ function parseBulkOrderCsv(text) {
     // where the actual order rows stop). Skip it outright rather than
     // having it inherit the last real recipient and get flagged as an
     // error for having no products.
-    const hasAnySkuThisRow = linePairs.some(p => (r[p.skuCol] || '').trim());
+    const hasAnySkuThisRow = linePairs.some(p => String(r[p.skuCol] ?? '').trim());
     if (!get('recipientName') && !get('addr1') && !hasAnySkuThisRow) continue;
 
     let raw;
@@ -2337,11 +2347,11 @@ function parseBulkOrderCsv(text) {
     const lineErrors = [];
     const lines = [];
     linePairs.forEach(({ n, skuCol, qtyCol }) => {
-      const sku = (r[skuCol] || '').trim().toUpperCase();
+      const sku = String(r[skuCol] ?? '').trim().toUpperCase();
       if (!sku) return; // this slot just wasn't used on this row
       const catalogEntry = SKU_BY_CODE[sku];
       if (!catalogEntry) { lineErrors.push(`unknown SKU "${sku}" (slot ${n})`); return; }
-      const qtyRaw = qtyCol !== null ? (r[qtyCol] || '').trim() : '';
+      const qtyRaw = qtyCol !== null ? String(r[qtyCol] ?? '').trim() : '';
       let qty = parseInt(qtyRaw, 10);
       const qtyDefaulted = !(qty > 0);
       if (qtyDefaulted) qty = 1;
@@ -2404,6 +2414,29 @@ function parseBulkOrderCsv(text) {
   return { orders, errors };
 }
 
+function parseBulkOrderCsv(text) {
+  return buildOrdersFromRows(parseCSV(text));
+}
+
+// Reads an uploaded .xlsx/.xls file via SheetJS — this is what lets a
+// spreadsheet someone has color-formatted in Excel be uploaded as-is
+// instead of needing to be re-saved as plain CSV (which would strip the
+// colors anyway, and isn't a step most people would know to take). Cell
+// formatting/colors/hyperlinks are irrelevant here — only the underlying
+// cell values matter, same as CSV.
+function parseBulkOrderExcel(arrayBuffer) {
+  const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+  const firstSheetName = workbook.SheetNames[0];
+  if (!firstSheetName) return { orders: [], errors: ['That Excel file has no sheets.'] };
+  const sheet = workbook.Sheets[firstSheetName];
+  // raw:false renders each cell as the text Excel would display (so a
+  // Zip typed as a number still comes through as e.g. "7306", handled by
+  // the same leading-zero fix as a CSV would need) rather than a raw
+  // number/date value.
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '' });
+  return buildOrdersFromRows(rows);
+}
+
 async function bulkParseAndPreview() {
   const fileInput = document.getElementById('bulkCsvInput');
   const resultsEl = document.getElementById('bulkPreviewResults');
@@ -2412,10 +2445,22 @@ async function bulkParseAndPreview() {
   bulkParsedOrders = null;
 
   const file = fileInput.files[0];
-  if (!file) { resultsEl.textContent = 'Choose a CSV file first.'; resultsEl.style.color = 'var(--rush)'; return; }
+  if (!file) { resultsEl.textContent = 'Choose a file first.'; resultsEl.style.color = 'var(--rush)'; return; }
 
-  const text = await file.text();
-  const { orders, errors } = parseBulkOrderCsv(text);
+  let parsed;
+  try {
+    if (/\.xlsx?$/i.test(file.name)) {
+      parsed = parseBulkOrderExcel(await file.arrayBuffer());
+    } else {
+      parsed = parseBulkOrderCsv(await file.text());
+    }
+  } catch (e) {
+    console.error('bulkParseAndPreview failed to read file', e);
+    resultsEl.textContent = 'Could not read that file — make sure it\'s a CSV or Excel (.xlsx/.xls) file.';
+    resultsEl.style.color = 'var(--rush)';
+    return;
+  }
+  const { orders, errors } = parsed;
 
   let html = '';
   if (orders.length > 0) {
