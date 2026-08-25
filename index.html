@@ -2076,7 +2076,11 @@ async function exportCSV() {
     });
   });
 
-  const blob = new Blob([rows.join('\n')], {type: 'text/csv;charset=utf-8;'});
+  // A leading UTF-8 BOM + CRLF line endings is the combination Excel on
+  // Windows needs to reliably detect encoding instead of mangling any
+  // special character in a name/note — harmless to Excel/Numbers on Mac
+  // and Google Sheets, which all read it the same either way.
+  const blob = new Blob(['﻿' + rows.join('\r\n')], {type: 'text/csv;charset=utf-8;'});
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   const today = new Date();
@@ -2139,6 +2143,12 @@ async function addTracking() {
 // (e.g. "Vicarage Lane, Charing Heath") and escaped quotes, which a plain
 // split(',') would mangle. Real 3PL export files use exactly this quoting.
 function parseCSV(text) {
+  // Strip a leading UTF-8 BOM defensively — file.text() already does this
+  // per spec, but a file re-saved by Excel or another tool before being
+  // re-uploaded could still carry one, and a stray BOM stuck to the first
+  // header name (e.g. "﻿Recipient") would silently break every
+  // header match that follows.
+  if (text.charCodeAt(0) === 0xFEFF) text = text.slice(1);
   const rows = [];
   let row = [], field = '', inQuotes = false;
   for (let i = 0; i < text.length; i++) {
@@ -2519,7 +2529,10 @@ function downloadBulkTemplate() {
   }
 
   const csv = rows.map(row => row.map(csvCell).join(',')).join('\r\n');
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  // Leading UTF-8 BOM so Excel on Windows detects the encoding correctly
+  // instead of risking mangled characters — harmless to Mac Excel/Numbers
+  // and Google Sheets, which handle it the same either way.
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -2643,7 +2656,10 @@ async function archiveAndClear() {
     });
   });
 
-  const blob = new Blob([rows.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  // Leading UTF-8 BOM + CRLF, same as every other CSV export here, so
+  // Excel on Windows reads it correctly (Mac Excel/Numbers and Google
+  // Sheets are unaffected either way).
+  const blob = new Blob(['﻿' + rows.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   const today = new Date();
