@@ -8,6 +8,10 @@
      spreadsheet someone has color-formatted in Excel can be uploaded
      directly instead of needing to be re-saved as plain CSV first. -->
 <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+<!-- ExcelJS: writes the downloadable Mass Upload template as a real,
+     color-formatted .xlsx (SheetJS's free build can read styles but
+     silently drops fill colors on write — verified directly, not assumed). -->
+<script src="https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"></script>
 <style>
   :root {
     --bg: #F6F5F0;
@@ -484,8 +488,8 @@
     <div class="card" style="max-width:640px;">
       <h2>Mass Upload Orders</h2>
       <div class="hint" style="margin-top:-6px;">One row = one order, address entered once. Sending more than one product to the same person? List it on that same row under "SKU 2"/"Qty 2", "SKU 3"/"Qty 3", and so on — not a separate row — so it stays one order/PO instead of looking like two. Need more than 5 products on one row? Just add "SKU 6"/"Qty 6" columns yourself, it'll be picked up automatically.</div>
-      <button type="button" class="btn-secondary" id="bulkTemplateBtn" style="margin-bottom:6px;">⬇ Download Template CSV</button>
-      <div class="hint" style="margin-bottom:14px;">The template includes the full valid-SKU list as reference columns on the right, so you can look up codes while filling in orders on the left. Those reference columns are ignored on upload — no need to delete them first.</div>
+      <button type="button" class="btn-secondary" id="bulkTemplateBtn" style="margin-bottom:6px;">⬇ Download Template (Excel)</button>
+      <div class="hint" style="margin-bottom:14px;">Downloads as a color-formatted .xlsx — the highlighted columns are where you type, the columns on the right are the full valid-SKU list for reference (ignored on upload, no need to delete them). Fill it in and upload it right back on this tab, .xlsx or .csv both work.</div>
 
       <div class="row2">
         <div class="field" id="f-bulk-requestor">
@@ -2559,29 +2563,58 @@ async function bulkConfirmImport() {
 // needs. (parseBulkOrderCsv() ignores unrecognized headers, and skips any
 // row with nothing in the actual order columns, so re-uploading this file
 // as-is — reference columns and all — is harmless, not ~100 error rows.)
-function downloadBulkTemplate() {
+// A real, color-formatted .xlsx — not CSV, which has no way to hold cell
+// colors at all. Colors echo the web tool's own palette (--ink header,
+// a tint of --accent marking the actual fill-in zone) rather than an
+// arbitrary scheme, so the template reads as part of the same tool.
+// Built with ExcelJS specifically because SheetJS's free build reads
+// styles but silently drops fill colors on write (checked directly).
+async function downloadBulkTemplate() {
   const orderHeaders = ["Recipient","Street Address","Unit/Apt/Floor/etc.","Phone Number","City","State","Zip","Country Code","Reason Code","SKU 1","Qty 1","SKU 2","Qty 2","SKU 3","Qty 3","SKU 4","Qty 4","SKU 5","Qty 5"];
-  const exampleRow = ["Dana Runyon","63 Prospect Street","","555-123-4567","Demarest","NJ","07627","US","Employee Order","LGDE160","2","LGSL160","1","","","","","",""];
+  const exampleRow = ["Dana Runyon","63 Prospect Street","","555-123-4567","Demarest","NJ","07627","US","Employee Order","LGDE160",2,"LGSL160",1,"","","","","",""];
   const refHeaders = ["Reference: SKU","Reference: Product Name"];
   const blankOrderRow = orderHeaders.map(() => '');
+  const allHeaders = [...orderHeaders, ...refHeaders];
 
-  const rows = [[...orderHeaders, ...refHeaders]];
+  const wb = new ExcelJS.Workbook();
+  const ws = wb.addWorksheet('Mass Upload');
+  ws.addRow(allHeaders);
   const rowCount = Math.max(1, CATALOG.length);
   for (let i = 0; i < rowCount; i++) {
     const orderCols = i === 0 ? exampleRow : blankOrderRow;
     const cat = CATALOG[i];
-    rows.push([...orderCols, cat ? cat.sku : '', cat ? cat.title : '']);
+    ws.addRow([...orderCols, cat ? cat.sku : '', cat ? cat.title : '']);
   }
 
-  const csv = rows.map(row => row.map(csvCell).join(',')).join('\r\n');
-  // Leading UTF-8 BOM so Excel on Windows detects the encoding correctly
-  // instead of risking mangled characters — harmless to Mac Excel/Numbers
-  // and Google Sheets, which handle it the same either way.
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const solid = (hex) => ({ type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF' + hex } });
+  const HEADER_FILL = solid('1B2027');   // --ink
+  const INPUT_FILL = solid('EEF1E4');    // pale tint of --accent (#7E9A33)
+  const REF_FILL = solid('F1F0EA');      // pale neutral tint, distinct from the input zone
+
+  const skuQtyStartCol = orderHeaders.indexOf('SKU 1') + 1; // ExcelJS columns are 1-indexed
+  const skuQtyEndCol = orderHeaders.length;
+  const refStartCol = orderHeaders.length + 1;
+  const refEndCol = allHeaders.length;
+
+  ws.getRow(1).eachCell((cell) => {
+    cell.fill = HEADER_FILL;
+    cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+    cell.alignment = { horizontal: 'center', vertical: 'middle' };
+  });
+  for (let r = 2; r <= rowCount + 1; r++) {
+    for (let c = skuQtyStartCol; c <= skuQtyEndCol; c++) ws.getRow(r).getCell(c).fill = INPUT_FILL;
+    for (let c = refStartCol; c <= refEndCol; c++) ws.getRow(r).getCell(c).fill = REF_FILL;
+  }
+
+  ws.columns = allHeaders.map(h => ({ width: Math.max(12, h.length + 2) }));
+  ws.views = [{ state: 'frozen', ySplit: 1 }];
+
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = 'mass-upload-template.csv';
+  a.download = 'mass-upload-template.xlsx';
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
