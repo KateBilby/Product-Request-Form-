@@ -2559,10 +2559,26 @@ async function bulkConfirmImport() {
 // The order-entry columns only ever need a row or two filled in, but a
 // plain CSV has no second sheet/dropdown-validation to hold "here's every
 // valid SKU" — so that reference list rides along as two extra columns on
-// the right, one catalog entry per row, for as many rows as the catalog
-// needs. (parseBulkOrderCsv() ignores unrecognized headers, and skips any
-// row with nothing in the actual order columns, so re-uploading this file
-// as-is — reference columns and all — is harmless, not ~100 error rows.)
+// the right, one entry per row. (parseBulkOrderCsv() ignores unrecognized
+// headers, and skips any row with nothing in the actual order columns, so
+// re-uploading this file as-is — reference columns and all — is harmless.)
+//
+// This is Kate's own curated/trimmed list (fewer than the full CATALOG —
+// bundles and rarely-ordered variants left out on purpose), shown here as
+// reference only. It does NOT restrict what SKUs an order can actually
+// use — parseBulkOrderCsv()/parseBulkOrderExcel() still validate against
+// the full SKU_BY_CODE catalog, so a SKU missing from this shorter list
+// still works fine if someone types it in.
+const MASS_UPLOAD_REFERENCE_SKUS = [
+  "LCBU160","LCCU160","LGCH160","LGDE160","LGFC150","LGPU160","LGSL160","LTLV101","LTPM101","LTSM101",
+  "LGGL160","LCPU160","LCDE160","LGPU14PK","LGDE14PK","LGSL14PK","LSTK01","LGBU14BO","LGBU6PK","LGCH14BO",
+  "LGCH14PK","LGCH4PK","LGCH6PK","LGCR4PK","LGDA160","LGDE14BO","LGFC14BO","LGGL14BO","LGIM14BO","LGIM14PK",
+  "LGIM6PK","LGMU6PK","LCNA160","LGPL14PK","LGPL16BO","LGPL4PK","LGPL8PK","LGPU14BO","LSRE3PK","LSRE5PK",
+  "LGSG2PK","LGSL14BO","LTBL100","LGCA160","LCSM130","LSCU230","LLGL107","LCGL160","LGPU6PK","LGDE6PK",
+  "LGSL6PK","LCGR160","LGTO160","LGSG121","LGTE14BO","LGPU2PK","LGDE2PK","LGSL2PK","LGTO2PK","LGCH2PK",
+  "LGGR160","LGFI160","LGPL160","LGIM160","LGRE150","LLCO108","LGCO160","LGBU160","LGCR160","LSRE130",
+  "LGMU160","LSGR130","LGST160","LCME230","LGDI145","LCBA190","LGCB160","LGCS160","LGMU14BO","LPT0111"
+];
 // A real, color-formatted .xlsx — not CSV, which has no way to hold cell
 // colors at all. Colors echo the web tool's own palette (--ink header,
 // a tint of --accent marking the actual fill-in zone) rather than an
@@ -2579,10 +2595,11 @@ async function downloadBulkTemplate() {
   const wb = new ExcelJS.Workbook();
   const ws = wb.addWorksheet('Mass Upload');
   ws.addRow(allHeaders);
-  const rowCount = Math.max(1, CATALOG.length);
+  const refList = MASS_UPLOAD_REFERENCE_SKUS.map(sku => SKU_BY_CODE[sku]).filter(Boolean);
+  const rowCount = Math.max(1, refList.length);
   for (let i = 0; i < rowCount; i++) {
     const orderCols = i === 0 ? exampleRow : blankOrderRow;
-    const cat = CATALOG[i];
+    const cat = refList[i];
     ws.addRow([...orderCols, cat ? cat.sku : '', cat ? cat.title : '']);
   }
 
