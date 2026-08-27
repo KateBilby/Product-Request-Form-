@@ -665,6 +665,27 @@ const CATALOG = [
 ];
 const SKU_BY_CODE = {};
 CATALOG.forEach(p => SKU_BY_CODE[p.sku.toUpperCase()] = p);
+
+// The array above is the fallback/offline default — on load, this swaps
+// in the live version from Airtable's Catalog table instead, so adding or
+// editing a SKU is just an Airtable row edit, no code change or redeploy.
+// Mutates CATALOG/SKU_BY_CODE in place (rather than reassigning) so every
+// other function that reads them keeps working unchanged either way. If
+// the relay's unreachable (or the Catalog table is empty/not set up yet),
+// this silently leaves the built-in list in place — never a hard failure.
+async function loadCatalogFromRelay() {
+  try {
+    const data = await relayFetch('/api/catalog');
+    if (!data || !Array.isArray(data.items) || data.items.length === 0) return;
+    CATALOG.length = 0;
+    data.items.forEach(it => { if (it.sku) CATALOG.push({ sku: it.sku, title: it.title || '', casepack: it.casepack ?? null }); });
+    Object.keys(SKU_BY_CODE).forEach(k => delete SKU_BY_CODE[k]);
+    CATALOG.forEach(p => SKU_BY_CODE[p.sku.toUpperCase()] = p);
+  } catch (e) {
+    console.warn('loadCatalogFromRelay: using the built-in catalog (relay/Catalog table unavailable)', e);
+  }
+}
+
 // Bundles/variety packs are excluded from search results below — they stay
 // in SKU_BY_CODE so any already-submitted rows referencing one still look
 // up correctly, they just can't be newly selected from the dropdown.
@@ -842,6 +863,7 @@ let sessionSubmitCount = 0;
 
 // ================= Init =================
 function init() {
+  loadCatalogFromRelay(); // fire-and-forget — swaps in the live catalog whenever it resolves, built-in list works fine until then
   const stateList = document.getElementById('us-states');
   stateList.innerHTML = US_STATES.map(s => `<option value="${s}">`).join('');
 
