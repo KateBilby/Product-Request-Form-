@@ -447,10 +447,11 @@
         <button class="btn-secondary" id="refreshBtn">Refresh</button>
         <button class="btn-export" id="exportBtn">Export Manual Order CSV</button>
         <button class="btn-secondary" id="archiveBtn" title="Downloads a CSV of processed orders 7+ days old, then removes them from the live table">Archive &amp; Clear (7+ days)</button>
+        <a class="btn-secondary" href="https://drive.google.com/drive/folders/1jZVXsOYbUDNzWIDV5vogEpZy4MO7mwUN" target="_blank" rel="noopener" style="text-decoration:none; display:inline-flex; align-items:center;">📁 Drive Backups</a>
       </div>
     </div>
     <div id="queueContainer"></div>
-    <div class="footnote">Next Day orders are pinned to the top and shaded red; 2-Day orders are shaded amber. An unprocessed order from a previous day is shaded yellow and marked "NOT TODAY" — it never disappears from this view just because a day passed, even with "Show all days" unchecked. Export generates a CSV in your Manual Order template's exact column format — each order keeps all its line items grouped under one Order Number. "Archive &amp; Clear" downloads a permanent CSV snapshot of processed orders 7+ days old, then removes just those from the live table — this is what keeps Airtable's free-tier row cap from ever becoming a problem.</div>
+    <div class="footnote">Next Day orders are pinned to the top and shaded red; 2-Day orders are shaded amber. An unprocessed order from a previous day is shaded yellow and marked "NOT TODAY" — it never disappears from this view just because a day passed, even with "Show all days" unchecked. Export generates a CSV in your Manual Order template's exact column format — each order keeps all its line items grouped under one Order Number. "Archive &amp; Clear" downloads a permanent CSV snapshot of processed orders 7+ days old, then removes just those from the live table — this is what keeps Airtable's free-tier row cap from ever becoming a problem. "Drive Backups" opens the Google Drive folder where the automated weekly/daily backup Sheet gets saved (set up separately in Google Apps Script — see the reference doc).</div>
   </div>
 
   <!-- TRACKING VIEW -->
