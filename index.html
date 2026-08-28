@@ -2033,14 +2033,20 @@ async function renderQueue() {
   // submitted yesterday and never marked done stays visible indefinitely,
   // regardless of "Show all days." Only already-processed orders respect
   // the today/show-all-days toggle (nothing left to act on there).
-  let filtered = list.filter(r => !r.processed || ((showAll || isToday(r.ts)) && showProcessed));
+  //
+  // Searching by requestor is the one exception to that toggle: typing a
+  // name means "show me everything this person has ever submitted," not
+  // "show me their unprocessed stuff, unless I also separately remember to
+  // check Show Processed." So a requestor filter bypasses the
+  // processed/day restriction entirely rather than just narrowing whatever
+  // already survived it.
+  let filtered = requestorFilter
+    ? list.filter(r => r.requestorName.toLowerCase().includes(requestorFilter))
+    : list.filter(r => !r.processed || ((showAll || isToday(r.ts)) && showProcessed));
   if (reasonFilter === '__none__') {
     filtered = filtered.filter(r => !r.reasonCode);
   } else if (reasonFilter) {
     filtered = filtered.filter(r => r.reasonCode === reasonFilter);
-  }
-  if (requestorFilter) {
-    filtered = filtered.filter(r => r.requestorName.toLowerCase().includes(requestorFilter));
   }
   const speedRank = { nextday: 0, "2day": 1, standard: 2 };
   filtered.sort((a,b) => {
