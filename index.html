@@ -142,6 +142,16 @@
 
   .casepack-hint { margin-top: 8px; font-size: 12px; color: var(--muted); display: none; }
   .casepack-hint.show { display: block; }
+
+  .manual-entry-toggle { margin-top: 6px; }
+  .manual-sku-link, .back-to-search-link { font-size: 11.5px; color: var(--muted); text-decoration: underline; cursor: pointer; background: none; border: none; font-family: var(--sans); padding: 0; }
+  .manual-sku-entry { display: none; margin-top: 8px; padding: 10px 12px; background: #FBF9F4; border: 1px solid var(--line); border-radius: 7px; }
+  .manual-sku-entry.show { display: block; }
+  .manual-sku-entry input { margin-top: 6px; }
+  .manual-sku-status { margin-top: 6px; font-size: 12px; }
+  .manual-sku-status.found { color: var(--ok); font-weight: 600; }
+  .manual-sku-status.not-found { color: var(--amber); font-weight: 600; }
+  .manual-sku-entry .back-to-search-link { display: block; margin-top: 8px; }
   .casepack-hint .calc { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; }
   .casepack-hint input { width: 55px; padding: 4px 6px; font-size: 12px; display: inline-block; }
   .casepack-hint button { font-size: 11.5px; padding: 4px 8px; border-radius: 5px; border: 1px solid var(--accent); background: #fff; color: var(--accent-ink); cursor: pointer; font-weight: 700; }
@@ -690,8 +700,32 @@ async function loadCatalogFromRelay() {
 // Bundles/variety packs are excluded from search results below — they stay
 // in SKU_BY_CODE so any already-submitted rows referencing one still look
 // up correctly, they just can't be newly selected from the dropdown.
+//
+// This used to only catch a title literally containing "bundle"/"variety
+// pack", or a SKU starting "LBC" — which missed most of the actual bundle
+// SKUs, since Lemme's naming isn't consistent about it: "Chill Gummies
+// 2-pack" (a bundle, SKU starts LBG) and "Purr 2-Pack Pouch" (a real
+// single-purchase product, SKU starts LG) both say "2-pack" in the title.
+// Text patterns can't tell those apart reliably, so this leans on the SKU
+// prefix family instead: LBG/LBT/LBX/LBY/LBC all identify a bundle/combo
+// product line, regardless of what the title happens to say.
+// LGFC2PK ("Focus Gummy 2ct") is the one known bundle-ish SKU that fits
+// neither a title nor a prefix pattern — called out explicitly rather than
+// silently missed again.
+const MANUAL_HIDDEN_SKUS = ["LGFC2PK"];
 function isBundleItem(p) {
-  return /bundle/i.test(p.title) || /variety pack/i.test(p.title) || /^LBC/i.test(p.sku);
+  return /bundle/i.test(p.title) || /variety pack/i.test(p.title) || /^LB[CGTXY]/i.test(p.sku) || /^LDTCBOX/i.test(p.sku) || MANUAL_HIDDEN_SKUS.includes(p.sku.toUpperCase());
+}
+
+// A selected line is usually a real catalog SKU, but manual entry (see
+// wireLine()) allows one that isn't in the catalog at all yet — falls back
+// to whatever title was hand-typed in that case instead of assuming
+// SKU_BY_CODE always has an entry.
+function lineItemTitle(row) {
+  const sku = row.dataset.selectedSku;
+  if (!sku) return '';
+  const cat = SKU_BY_CODE[sku.toUpperCase()];
+  return cat ? cat.title : (row.dataset.manualTitle || '');
 }
 
 const US_STATES = ["AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA","KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ","NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT","VA","WA","WV","WI","WY","DC"];
@@ -1270,7 +1304,7 @@ async function saveCurrentAsProductCombo() {
     .map(row => {
       const qtyRaw = parseInt(row.querySelector('.qty-input').value, 10);
       const qty = (qtyRaw > 0) ? qtyRaw : 1;
-      return { sku: row.dataset.selectedSku, title: SKU_BY_CODE[row.dataset.selectedSku.toUpperCase()].title, qty };
+      return { sku: row.dataset.selectedSku, title: lineItemTitle(row), qty };
     });
 
   const msg = document.getElementById('saveProductMsg');
@@ -1321,7 +1355,15 @@ function addLine() {
         </div>
         <div class="sku-selected-preview"><span></span><button type="button" class="change-btn">Change</button></div>
         <div class="casepack-hint"></div>
-        <div class="err">Select a product from the list — free text won't be accepted</div>
+        <div class="manual-entry-toggle"><button type="button" class="manual-sku-link">Can't find it? Enter SKU manually</button></div>
+        <div class="manual-sku-entry">
+          <div class="hint" style="margin-top:0;">Only use this if the product genuinely isn't showing up in search. If it's a brand-new SKU, it still needs to be added to the Catalog table in Airtable so it's findable through search going forward.</div>
+          <input type="text" class="manual-sku-input" placeholder="SKU code" style="text-transform:uppercase;">
+          <input type="text" class="manual-title-input" placeholder="Product title">
+          <div class="manual-sku-status"></div>
+          <button type="button" class="back-to-search-link">Back to search</button>
+        </div>
+        <div class="err">Select a product from the list, or fill in both fields under "Enter SKU manually"</div>
       </div>
       <div class="field qty-field">
         <label>Quantity (eaches)</label>
@@ -1484,6 +1526,7 @@ function wireLine(row) {
 
   changeBtn.addEventListener('click', () => {
     row.dataset.selectedSku = '';
+    delete row.dataset.manualTitle;
     preview.classList.remove('show');
     casepackHint.classList.remove('show');
     input.value = '';
@@ -1495,11 +1538,82 @@ function wireLine(row) {
     row.remove();
     renumberLines();
   });
+
+  // ============ Manual SKU entry (escape hatch when search comes up empty) ============
+  const manualLink = row.querySelector('.manual-sku-link');
+  const manualEntry = row.querySelector('.manual-sku-entry');
+  const manualSkuInput = row.querySelector('.manual-sku-input');
+  const manualTitleInput = row.querySelector('.manual-title-input');
+  const manualStatus = row.querySelector('.manual-sku-status');
+  const backToSearchLink = row.querySelector('.back-to-search-link');
+
+  function syncManualSelection() {
+    const sku = manualSkuInput.value.trim().toUpperCase();
+    const catalogEntry = sku ? SKU_BY_CODE[sku] : null;
+    if (catalogEntry) {
+      // It exists in the catalog (possibly just hidden from search, e.g. a
+      // bundle) — use the real title, don't trust anything hand-typed.
+      manualTitleInput.value = catalogEntry.title;
+      manualTitleInput.readOnly = true;
+      manualStatus.textContent = `✓ Found in catalog: ${catalogEntry.title}`;
+      manualStatus.className = 'manual-sku-status found';
+      row.dataset.selectedSku = catalogEntry.sku;
+      delete row.dataset.manualTitle;
+      row.querySelector('.field.sku-field').classList.remove('invalid');
+    } else {
+      manualTitleInput.readOnly = false;
+      const title = manualTitleInput.value.trim();
+      if (sku) {
+        manualStatus.textContent = "Not in the catalog yet — this will still submit, but please let ops know so it can be added to Catalog properly. Double-check the SKU is typed exactly right.";
+        manualStatus.className = 'manual-sku-status not-found';
+      } else {
+        manualStatus.textContent = '';
+        manualStatus.className = 'manual-sku-status';
+      }
+      if (sku && title) {
+        row.dataset.selectedSku = sku;
+        row.dataset.manualTitle = title;
+        row.querySelector('.field.sku-field').classList.remove('invalid');
+      } else {
+        row.dataset.selectedSku = '';
+        delete row.dataset.manualTitle;
+      }
+    }
+  }
+
+  manualLink.addEventListener('click', () => {
+    row.querySelector('.sku-search-wrap').style.display = 'none';
+    preview.classList.remove('show');
+    casepackHint.classList.remove('show');
+    row.querySelector('.manual-entry-toggle').style.display = 'none';
+    manualEntry.classList.add('show');
+    input.value = '';
+    row.dataset.selectedSku = '';
+    manualSkuInput.focus();
+  });
+
+  backToSearchLink.addEventListener('click', () => {
+    manualEntry.classList.remove('show');
+    row.querySelector('.sku-search-wrap').style.display = '';
+    row.querySelector('.manual-entry-toggle').style.display = '';
+    manualSkuInput.value = '';
+    manualTitleInput.value = '';
+    manualTitleInput.readOnly = false;
+    manualStatus.textContent = '';
+    manualStatus.className = 'manual-sku-status';
+    row.dataset.selectedSku = '';
+    delete row.dataset.manualTitle;
+    input.focus();
+  });
+
+  manualSkuInput.addEventListener('input', syncManualSelection);
+  manualTitleInput.addEventListener('input', syncManualSelection);
 }
 function selectSku(row, sku) {
   const p = SKU_BY_CODE[sku.toUpperCase()];
   if (!p) return;
   row.dataset.selectedSku = p.sku;
+  delete row.dataset.manualTitle;
   const input = row.querySelector('.sku-search-input');
   const results = row.querySelector('.sku-results');
   const preview = row.querySelector('.sku-selected-preview');
@@ -1763,9 +1877,17 @@ async function onSubmit(e) {
       qtyField.classList.add('invalid'); rowValid = false;
       problems.push({ el: row, label: `Item ${i + 1}: enter a quantity` });
     } else { qtyField.classList.remove('invalid'); }
-    if (rowValid) lines.push({ sku, title: SKU_BY_CODE[sku.toUpperCase()].title, qty });
+    if (rowValid) lines.push({ sku, title: lineItemTitle(row), qty, notInCatalog: !SKU_BY_CODE[sku.toUpperCase()] });
     else valid = false;
   });
+
+  // A manually-entered SKU that isn't in the catalog at all still goes
+  // through (that's the point of the escape hatch), but ops needs to see
+  // it flagged rather than discover it's unfamiliar only at fulfillment.
+  const uncatalogedSkus = lines.filter(l => l.notInCatalog).map(l => l.sku);
+  const uncatalogedWarning = uncatalogedSkus.length
+    ? `[NOT YET IN CATALOG: ${uncatalogedSkus.join(', ')} — entered manually, please verify and add to the Catalog table] `
+    : '';
 
   if (!valid) { showValidationProblems(problems); return; }
 
@@ -1823,7 +1945,7 @@ async function onSubmit(e) {
         SKU: l.sku,
         "Product Title": l.title,
         Quantity: l.qty,
-        Notes: notes,
+        Notes: uncatalogedWarning + notes,
         Processed: false
       });
     });
